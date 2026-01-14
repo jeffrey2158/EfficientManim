@@ -1,3 +1,10 @@
+# Register this as a proper app using the classic ctypes.windll workaround
+import ctypes
+import sys
+
+if sys.platform == "win32":
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("com.programmersd.efficientmanim")
+
 # To run this code you need to install the following dependencies:
 # pip install google-genai PySide6 manim
 
@@ -41,7 +48,6 @@ def generate(prompt, on_chunk, model="gemini-3-flash-preview"):
 # EFFICIENT MANIM ULTIMATE - MONOLITHIC SOURCE
 # ==============================================================================
 
-import sys
 import shutil
 import json
 import uuid
@@ -2352,6 +2358,7 @@ class EfficientManimWindow(QMainWindow):
         self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}")
         self.resize(1600, 1000)
         self.setStyleSheet(THEME_MANAGER.get_stylesheet())
+        self.setWindowIcon(QIcon("icon/icon.ico"))
         
         self.nodes = {} 
         self.project_path = None
