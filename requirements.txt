@@ -1,0 +1,3 @@
+google-genai
+PySide6
+manim
