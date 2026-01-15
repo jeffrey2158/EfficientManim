@@ -677,7 +677,10 @@ class Asset:
     def __init__(self, name, path, kind):
         self.id = str(uuid.uuid4())
         self.name = name
-        self.original_path = path
+        # original_path: Where it came from initially (for reference)
+        self.original_path = str(Path(path).as_posix()) 
+        # current_path: Where it exists NOW (could be original, or temp/extracted)
+        self.current_path = str(Path(path).as_posix())
         self.kind = kind # "image", "video", "audio"
         self.local_file = "" # Filename in .efp assets/ folder
 
@@ -686,10 +689,11 @@ class Asset:
             "id": self.id,
             "name": self.name,
             "original": self.original_path,
+            # We don't save current_path, because on load we calculate a new one
             "kind": self.kind,
             "local": self.local_file
         }
-
+    
 # ==============================================================================
 # 6. GRAPHICS SYSTEM
 # ==============================================================================
@@ -912,20 +916,24 @@ class AssetManager(QObject):
         self.assets = {} # id -> Asset
 
     def add_asset(self, path):
-        path = Path(path)
-        if not path.exists(): return
+        path_obj = Path(path)
+        if not path_obj.exists(): return
+        
+        # Normalize path for Manim (Forward Slashes)
+        clean_path = path_obj.resolve().as_posix()
         
         kind = "unknown"
-        s = path.suffix.lower()
-        if s in [".png", ".jpg", ".jpeg", ".svg"]: kind = "image"
-        elif s in [".mp4", ".mov"]: kind = "video"
-        elif s in [".mp3", ".wav"]: kind = "audio"
+        s = path_obj.suffix.lower()
+        if s in [".png", ".jpg", ".jpeg", ".bmp", ".webp"]: kind = "image"
+        elif s in [".svg"]: kind = "image" # SVG is treated as image/vector
+        elif s in [".mp4", ".mov", ".avi", ".webm"]: kind = "video"
+        elif s in [".mp3", ".wav", ".ogg"]: kind = "audio"
         
         if kind == "unknown":
             LOGGER.error(f"Unsupported asset type: {s}")
             return
 
-        asset = Asset(path.name, str(path), kind)
+        asset = Asset(path_obj.name, clean_path, kind)
         self.assets[asset.id] = asset
         self.assets_changed.emit()
         LOGGER.info(f"Asset added: {asset.name}")
@@ -937,6 +945,12 @@ class AssetManager(QObject):
 
     def get_list(self):
         return list(self.assets.values())
+    
+    def get_asset_path(self, asset_id):
+        """Safely retrieve the absolute POSIX path for Manim."""
+        if asset_id in self.assets:
+            return self.assets[asset_id].current_path
+        return None
 
 ASSETS = AssetManager()
 
@@ -957,8 +971,24 @@ class TypeSafeParser:
     POINT_KEYWORDS = {'point', 'points', 'center', 'pos', 'position', 'start', 'end', 'direction'}
     
     @staticmethod
+    def is_asset_param(param_name):
+        """Check if parameter expects a file/asset."""
+        n = param_name.lower()
+        # Specific fix for ImageMobject
+        if "filename" in n: return True
+        
+        # General file keywords
+        if "file" in n or "image" in n or "sound" in n or "svg" in n:
+             # Exclude false positives like "fill_opacity" or "profile"
+             if "fill" in n or "profile" in n: return False
+             return True
+        return False
+
+    @staticmethod
     def is_numeric_param(param_name):
         """Check if parameter should be numeric."""
+        if TypeSafeParser.is_asset_param(param_name): 
+            return False
         return any(kw in param_name.lower() for kw in TypeSafeParser.NUMERIC_KEYWORDS)
     
     @staticmethod
@@ -1118,31 +1148,26 @@ class PropertiesPanel(QWidget):
         self.active_widgets = {}
 
     def set_node(self, node_item: NodeItem):
-        """Load node properties into inspector with full type safety and column support."""
+        """Load node properties into inspector with full type safety."""
         self.current_node = node_item
         
-        # Clean up previous widgets safely
+        # Clean up previous widgets
         for widget in self.active_widgets.values():
-            try:
-                widget.deleteLater()
-            except:
-                pass
+            try: widget.deleteLater()
+            except: pass
         self.active_widgets.clear()
         
         while self.form.count():
             child = self.form.takeAt(0)
-            if child.widget():
-                try:
-                    child.widget().deleteLater()
-                except:
-                    pass
+            if child.widget(): child.widget().deleteLater()
 
-        if not node_item:
-            return
+        if not node_item: return
 
-        # Normalize ALL color values and validate types
+        # FIX: Validate types, but SKIP asset parameters to prevent UUID->0.0 corruption
         for k, v in list(node_item.data.params.items()):
-            if TypeSafeParser.is_color_param(k):
+            if TypeSafeParser.is_asset_param(k):
+                continue # Do not touch asset strings/UUIDs
+            elif TypeSafeParser.is_color_param(k):
                 node_item.data.params[k] = TypeSafeParser.parse_color(v)
             elif TypeSafeParser.is_numeric_param(k):
                 node_item.data.params[k] = TypeSafeParser.parse_numeric(v)
@@ -1181,39 +1206,30 @@ class PropertiesPanel(QWidget):
 
         try:
             cls = getattr(manim, node_item.data.cls_name, None)
-            if not cls:
-                return
+            if not cls: return
             
             sig = inspect.signature(cls.__init__)
             
-            # First, auto-load ANY missing parameters from class signature (for AI nodes)
+            # Auto-load missing parameters
             for param_name, param in sig.parameters.items():
-                if param_name in ('self', 'args', 'kwargs', 'mobject'):
-                    continue
+                if param_name in ('self', 'args', 'kwargs', 'mobject'): continue
                 
-                # If parameter not in params but has a default, add it
                 if param_name not in node_item.data.params:
                     if param.default is inspect.Parameter.empty:
                         default_val = param.default
-                        
-                        # Type-safe default assignment
                         if TypeSafeParser.is_color_param(param_name):
                             default_val = TypeSafeParser.parse_color(default_val)
                         elif TypeSafeParser.is_numeric_param(param_name):
                             default_val = TypeSafeParser.parse_numeric(default_val)
-                        
                         node_item.data.params[param_name] = default_val
             
-            # Now create all parameter rows
+            # Create Rows
             for name, param in sig.parameters.items():
-                if name in ['self', 'args', 'kwargs', 'mobject']:
-                    continue
+                if name in ['self', 'args', 'kwargs', 'mobject']: continue
                 
                 val = node_item.data.params.get(name, param.default)
-                if val is inspect.Parameter.empty:
-                    val = None
+                if val is inspect.Parameter.empty: val = None
                 
-                # Create parameter row with State and Escape String columns
                 row_widget = self.create_parameter_row(name, val, param.annotation)
                 if row_widget:
                     self.form.addRow(name, row_widget)
@@ -1266,20 +1282,23 @@ class PropertiesPanel(QWidget):
     def create_typed_widget(self, key, value, annotation):
         """Create typed widget with safe type enforcement and validation."""
         def on_change(v):
-            if not self.current_node:
-                return
-            
+            if not self.current_node: return
             try:
                 if key == "_name":
                     self.current_node.data.name = str(v)
                 else:
-                    # Type-safe value storage
-                    if TypeSafeParser.is_color_param(key):
+                    # FIX: Strict order of operations. Check Asset FIRST.
+                    if TypeSafeParser.is_asset_param(key):
+                        # Store the UUID string directly. Do NOT parse as number.
+                        self.current_node.data.params[key] = v
+                    elif TypeSafeParser.is_color_param(key):
                         v = TypeSafeParser.parse_color(v)
+                        self.current_node.data.params[key] = v
                     elif TypeSafeParser.is_numeric_param(key):
                         v = TypeSafeParser.parse_numeric(v)
-                    
-                    self.current_node.data.params[key] = v
+                        self.current_node.data.params[key] = v
+                    else:
+                        self.current_node.data.params[key] = v
                 
                 self.current_node.update()
                 self.debouncer.start()
@@ -1287,59 +1306,52 @@ class PropertiesPanel(QWidget):
                 LOGGER.warn(f"Value change error for {key}: {e}")
 
         try:
-            # 1. ASSET PATHS
-            if "file" in key.lower() or "image" in key.lower() or "sound" in key.lower():
+            # 1. ASSET PATHS (Corrected detection)
+            if TypeSafeParser.is_asset_param(key):
                 combo = QComboBox()
                 combo.addItem("(None)", None)
                 for asset in ASSETS.get_list():
-                    combo.addItem(asset.name, asset.id)
+                    # Show Emoji + Name
+                    combo.addItem(f"📄 {asset.name}", asset.id)
                 
                 if value:
                     idx = combo.findData(value)
-                    if idx >= 0:
-                        combo.setCurrentIndex(idx)
+                    if idx >= 0: combo.setCurrentIndex(idx)
                 
                 combo.currentIndexChanged.connect(lambda i: on_change(combo.itemData(i)))
                 return combo
 
             # 2. COLORS
             if TypeSafeParser.is_color_param(key):
+                # ... (Keep existing color logic) ...
                 btn = QPushButton("Pick Color")
                 hex_val = TypeSafeParser.parse_color(value)
-                btn.setStyleSheet(f"background-color: {hex_val}; color: white; border: 1px solid #333; padding: 5px; font-weight: bold;")
-                btn.setToolTip(f"Current: {hex_val}")
-
+                btn.setStyleSheet(f"background-color: {hex_val}; color: white;")
+                
                 def pick_color():
-                    initial_color = QColor(hex_val)
-                    if not initial_color.isValid():
-                        initial_color = QColor("#FFFFFF")
-                    
-                    col = QColorDialog.getColor(initial_color, None, "Select Color")
+                    col = QColorDialog.getColor(QColor(hex_val), None, "Select Color")
                     if col.isValid():
                         new_hex = col.name()
-                        btn.setStyleSheet(f"background-color: {new_hex}; color: white; border: 1px solid #333; padding: 5px; font-weight: bold;")
-                        btn.setToolTip(f"Current: {new_hex}")
+                        btn.setStyleSheet(f"background-color: {new_hex}; color: white;")
                         on_change(new_hex)
 
                 btn.clicked.connect(pick_color)
                 return btn
 
-            # 3. NUMERIC TYPES (with safe parsing)
+             # 3. NUMERIC
             if TypeSafeParser.is_numeric_param(key) or annotation in (float, int):
+                # ... (Keep existing numeric logic) ...
                 if annotation == float or isinstance(value, float):
                     sb = QDoubleSpinBox()
                     sb.setRange(-10000.0, 10000.0)
                     sb.setSingleStep(0.1)
-                    val = TypeSafeParser.parse_numeric(value)
-                    sb.setValue(val)
+                    sb.setValue(TypeSafeParser.parse_numeric(value))
                     sb.valueChanged.connect(on_change)
                     return sb
                 else:
                     sb = QSpinBox()
                     sb.setRange(-10000, 10000)
-                    sb.setSingleStep(1)
-                    val = TypeSafeParser.parse_numeric(value)
-                    sb.setValue(int(val))
+                    sb.setValue(int(TypeSafeParser.parse_numeric(value)))
                     sb.valueChanged.connect(on_change)
                     return sb
 
@@ -1351,21 +1363,13 @@ class PropertiesPanel(QWidget):
                 return chk
 
             # 5. STRING / FALLBACK
-            str_val = ""
-            try:
-                if value is not None:
-                    str_val = str(value)
-            except Exception as e:
-                LOGGER.warn(f"Cannot convert {key} to string: {e}")
-                str_val = "[Complex Object]"
-            
+            str_val = str(value) if value is not None else ""
             le = QLineEdit(str_val)
             le.textChanged.connect(on_change)
             return le
 
         except Exception as e:
             LOGGER.error(f"Widget creation error for '{key}': {e}")
-            traceback.print_exc()
             return None
 
     def update_param(self, key, val):
@@ -2847,17 +2851,19 @@ class EfficientManimWindow(QMainWindow):
     def _format_param_value(self, param_name, value, node_data):
         """Safely format parameter value with type enforcement and string escaping."""
         try:
-            # Asset reference
+            # 1. ASSET HANDLING
+            # If the value matches an Asset ID, return the absolute path string
             if isinstance(value, str) and value in ASSETS.assets:
-                return repr(ASSETS.assets[value].original_path.replace("\\", "/"))
+                abs_path = ASSETS.get_asset_path(value)
+                if abs_path:
+                    # Manim needs forward slashes even on Windows
+                    return f'r"{abs_path}"' 
             
-            # Type-safe formatting
+            # 2. Type-safe formatting
             if TypeSafeParser.is_color_param(param_name):
                 color_val = str(value).strip()
-                # Check if it's a Manim color constant (like BLUE, RED, CYAN)
                 if color_val.upper() in dir(manim) and hasattr(manim, color_val.upper()):
-                    return color_val.upper()  # Return bare constant, no quotes
-                # Otherwise return as hex
+                    return color_val.upper()
                 return repr(TypeSafeParser.parse_color(color_val))
             
             elif TypeSafeParser.is_numeric_param(param_name):
@@ -2868,10 +2874,9 @@ class EfficientManimWindow(QMainWindow):
                 point_val = TypeSafeParser.validate_point_safe(value)
                 return f"np.array({repr(point_val.tolist())})"
             
-            # String escaping
+            # 3. String escaping
             elif isinstance(value, str):
                 if node_data.should_escape_string(param_name):
-                    # Remove quotes - output as bare identifier
                     return value.strip("'\"")
                 return repr(value)
             
@@ -3101,6 +3106,7 @@ class EfficientManimWindow(QMainWindow):
         if not path: return
         
         meta = {"name": Path(path).stem, "created": str(datetime.now()), "version": APP_VERSION}
+        
         graph_data = {
             "nodes": [n.data.to_dict() for n in self.nodes.values()],
             "wires": [{"start": w.start_socket.parentItem().data.id, "end": w.end_socket.parentItem().data.id} 
@@ -3110,26 +3116,51 @@ class EfficientManimWindow(QMainWindow):
         try:
             with tempfile.TemporaryDirectory() as td:
                 t_path = Path(td)
+                
+                # Write JSONs
                 with open(t_path / "metadata.json", "w") as f: json.dump(meta, f, indent=2)
                 with open(t_path / "graph.json", "w") as f: json.dump(graph_data, f, indent=2)
                 with open(t_path / "code.py", "w") as f: f.write(self.code_view.toPlainText())
                 
-                (t_path / "assets").mkdir()
+                # Handle Assets
+                assets_dir = t_path / "assets"
+                assets_dir.mkdir()
+                
                 asset_manifest = []
                 for a in ASSETS.get_list():
-                    dst_name = f"{a.id}{Path(a.original_path).suffix}"
-                    shutil.copy2(a.original_path, t_path / "assets" / dst_name)
-                    d = a.to_dict(); d["local"] = dst_name
-                    asset_manifest.append(d)
+                    # Calculate safe local filename
+                    safe_suffix = Path(a.current_path).suffix
+                    dst_name = f"{a.id}{safe_suffix}"
+                    
+                    source_path = Path(a.current_path)
+                    
+                    if source_path.exists():
+                        shutil.copy2(source_path, assets_dir / dst_name)
+                        
+                        # Save manifest entry
+                        d = a.to_dict()
+                        d["local"] = dst_name # Important: Store local ref
+                        asset_manifest.append(d)
+                    else:
+                        LOGGER.warn(f"Could not find asset to save: {source_path}")
+                
                 with open(t_path / "assets.json", "w") as f: json.dump(asset_manifest, f, indent=2)
                 
+                # Zip it up
                 shutil.make_archive(str(Path(path).parent / Path(path).stem), 'zip', t_path)
-                final = Path(path).with_suffix(PROJECT_EXT)
-                if final.exists(): final.unlink()
-                shutil.move(str(Path(path).parent / f"{Path(path).stem}.zip"), final)
-                LOGGER.info(f"Saved to {final}")
+                
+                # Rename .zip to .efp
+                final_zip = Path(path).parent / f"{Path(path).stem}.zip"
+                final_efp = Path(path).with_suffix(PROJECT_EXT)
+                
+                if final_efp.exists(): final_efp.unlink()
+                shutil.move(str(final_zip), final_efp)
+                
+                LOGGER.info(f"Project saved to {final_efp}")
+                
         except Exception as e:
             LOGGER.error(f"Save Failed: {e}")
+            traceback.print_exc()
 
     def open_project(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open", "", f"EfficientManim (*{PROJECT_EXT})")
@@ -3137,46 +3168,76 @@ class EfficientManimWindow(QMainWindow):
         
         try:
             self.nodes.clear(); self.scene.clear(); ASSETS.clear()
-            dest = AppPaths.TEMP_DIR / "OpenProject"
+            
+            # Create a clean extraction folder for this project session
+            dest = AppPaths.TEMP_DIR / "Project_Assets"
             if dest.exists(): shutil.rmtree(dest)
             dest.mkdir(parents=True)
             
             with zipfile.ZipFile(path, 'r') as zf: zf.extractall(dest)
             
-            if (dest / "assets.json").exists():
-                with open(dest / "assets.json") as f:
-                    for ad in json.load(f):
-                        local_p = dest / "assets" / ad["local"]
-                        a = Asset(ad["name"], str(local_p), ad["kind"]); a.id = ad["id"]
+            # 1. Load Assets and Re-link Paths
+            assets_json = dest / "assets.json"
+            if assets_json.exists():
+                with open(assets_json) as f:
+                    asset_list = json.load(f)
+                    for ad in asset_list:
+                        # Construct the path to the extracted file
+                        local_name = ad.get("local", "")
+                        extracted_path = dest / "assets" / local_name
+                        
+                        # Re-create asset object
+                        a = Asset(ad["name"], str(extracted_path.as_posix()), ad["kind"])
+                        a.id = ad["id"]
+                        a.original_path = ad["original"]
+                        
+                        # CRITICAL: Set current_path to the extracted temp file
+                        if extracted_path.exists():
+                            a.current_path = str(extracted_path.resolve().as_posix())
+                        else:
+                            # Fallback if extraction failed (shouldn't happen)
+                            LOGGER.warn(f"Missing asset file: {local_name}")
+                            a.current_path = ad["original"]
+                            
                         ASSETS.assets[a.id] = a
-                        ASSETS.assets_changed.emit()
+                    ASSETS.assets_changed.emit()
             
-            if (dest / "graph.json").exists():
-                with open(dest / "graph.json") as f:
+            # 2. Load Graph
+            graph_json = dest / "graph.json"
+            if graph_json.exists():
+                with open(graph_json) as f:
                     g = json.load(f)
                     node_map = {}
                     for nd in g["nodes"]:
-                        node = self.add_node(nd["type"], nd["cls_name"], nd["params"], nd["pos"], nd["id"])
+                        # Fix for Mobject casing
+                        type_str = nd["type"].capitalize() if nd["type"].upper() == "MOBJECT" else "Animation"
                         
-                        # --- FIX: Restore Metadata (Escaping, Enabled status, AI flags) ---
+                        node = self.add_node(type_str, nd["cls_name"], nd["params"], nd["pos"], nd["id"])
+                        
+                        # Restore metadata
                         if "param_metadata" in nd:
                             node.data.param_metadata = nd["param_metadata"]
                         if "is_ai_generated" in nd:
                             node.data.is_ai_generated = nd["is_ai_generated"]
-                            node.data.ai_source = nd.get("ai_source")
-                            node.data.ai_code_snippet = nd.get("ai_code_snippet")
-                        # ------------------------------------------------------------------
-
+                        
                         node_map[nd["id"]] = node
+                        
                     for w in g["wires"]:
                         n1, n2 = node_map.get(w["start"]), node_map.get(w["end"])
                         if n1 and n2: self.scene.try_connect(n1.out_socket, n2.in_socket)
             
+            # 3. Load Saved Code (if any)
+            code_py = dest / "code.py"
+            if code_py.exists():
+                with open(code_py, "r") as f:
+                    self.code_view.setText(f.read())
+            
             self.compile_graph()
-            LOGGER.info("Project Loaded.")
+            LOGGER.info("Project Loaded Successfully.")
+            
         except Exception as e:
             LOGGER.error(f"Open Failed: {e}")
-            traceback.print_exc() # Added to help debug future errors
+            traceback.print_exc()
 
     def open_settings(self):
         SettingsDialog(self).exec()
