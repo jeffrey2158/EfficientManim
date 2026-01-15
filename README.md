@@ -134,3 +134,5 @@ python main.py
 ---
 
 Made with lots of ❤️💚💙 by Soumalya a.k.a. @pro-grammer-SD.
+
+Discussions at this subreddit: https://www.reddit.com/r/manim/comments/1qck0ji/i_built_a_nodebased_manim_ide_with_ai_assistance/
