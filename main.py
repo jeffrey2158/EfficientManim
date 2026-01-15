@@ -2722,7 +2722,10 @@ class EfficientManimWindow(QMainWindow):
         self.add_node(type_str, cls_name, pos=(center.x(), center.y()))
 
     def add_node(self, type_str, cls_name, params=None, pos=(0,0), nid=None):
-        ntype = NodeType.MOBJECT if type_str == "Mobject" else NodeType.ANIMATION
+        # FIX: Normalize string to uppercase to handle "Mobject" (from UI) and "MOBJECT" (from JSON)
+        is_mobject = str(type_str).upper() == "MOBJECT"
+        ntype = NodeType.MOBJECT if is_mobject else NodeType.ANIMATION
+        
         data = NodeData(cls_name, ntype, cls_name)
         if nid: data.id = nid
         if params: data.params = params
@@ -2734,7 +2737,7 @@ class EfficientManimWindow(QMainWindow):
         LOGGER.info(f"Created {cls_name}")
         self.compile_graph() # Auto-Refresh
         return item
-
+    
     def delete_selected(self):
         for item in self.scene.selectedItems():
             if isinstance(item, NodeItem): self.remove_node(item)
@@ -3154,6 +3157,16 @@ class EfficientManimWindow(QMainWindow):
                     node_map = {}
                     for nd in g["nodes"]:
                         node = self.add_node(nd["type"], nd["cls_name"], nd["params"], nd["pos"], nd["id"])
+                        
+                        # --- FIX: Restore Metadata (Escaping, Enabled status, AI flags) ---
+                        if "param_metadata" in nd:
+                            node.data.param_metadata = nd["param_metadata"]
+                        if "is_ai_generated" in nd:
+                            node.data.is_ai_generated = nd["is_ai_generated"]
+                            node.data.ai_source = nd.get("ai_source")
+                            node.data.ai_code_snippet = nd.get("ai_code_snippet")
+                        # ------------------------------------------------------------------
+
                         node_map[nd["id"]] = node
                     for w in g["wires"]:
                         n1, n2 = node_map.get(w["start"]), node_map.get(w["end"])
@@ -3163,6 +3176,7 @@ class EfficientManimWindow(QMainWindow):
             LOGGER.info("Project Loaded.")
         except Exception as e:
             LOGGER.error(f"Open Failed: {e}")
+            traceback.print_exc() # Added to help debug future errors
 
     def open_settings(self):
         SettingsDialog(self).exec()
