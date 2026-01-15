@@ -70,15 +70,31 @@ A powerful 3-column property editor located on the right.
 
 ## ⌨️ Keyboard Shortcuts
 
-| Shortcut | Action |
-|:---|:---|
-| **Delete** | Delete selected nodes/wires |
-| **Ctrl + Z** | Undo last action |
-| **Ctrl + Y** | Redo last action |
-| **Ctrl + S** | Save project (.efp) |
-| **Ctrl + O** | Open project |
-| **Ctrl + 0** | Fit scene to view |
-| **Ctrl + Alt + Del** | Clear entire scene |
+### 📁 File Operations
+| Action | Windows/Linux | macOS | Description |
+| :--- | :--- | :--- | :--- |
+| **New Project** | `Ctrl` + `N` | `Cmd` + `N` | Clears the current project to start a new one. |
+| **Open Project** | `Ctrl` + `O` | `Cmd` + `O` | Open an existing `.efp` project file. |
+| **Save Project** | `Ctrl` + `S` | `Cmd` + `S` | Save the current project. |
+| **Exit** | `Ctrl` + `Q` | `Cmd` + `Q` | Close the application. |
+
+### ✏️ Editing
+| Action | Windows/Linux | macOS | Description |
+| :--- | :--- | :--- | :--- |
+| **Undo** | `Ctrl` + `Z` | `Cmd` + `Z` | Undo the last action. |
+| **Redo** | `Ctrl` + `Y` *or* `Ctrl` + `Shift` + `Z` | `Cmd` + `Shift` + `Z` | Redo the last undone action. |
+| **Delete** | `Delete` | `Delete` / `Fn` + `Backspace` | Delete the selected nodes or wires. |
+
+### 👁️ View & Canvas
+| Action | Windows/Linux | macOS | Description |
+| :--- | :--- | :--- | :--- |
+| **Fit View** | `Ctrl` + `0` | `Cmd` + `0` | Zooms and pans the camera to fit all nodes on screen. |
+| **Clear All** | `Ctrl` + `Alt` + `Delete` | `Cmd` + `Opt` + `Delete` | Deletes **all** nodes and wires from the canvas. |
+
+### ❓ Help
+| Action | Windows/Linux | macOS | Description |
+| :--- | :--- | :--- | :--- |
+| **Shortcuts** | `Ctrl` + `?` | `Cmd` + `?` | Opens the Keyboard Shortcuts reference dialog. |
 
 ---
 
