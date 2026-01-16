@@ -5,8 +5,15 @@ import sys
 if sys.platform == "win32":
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("com.programmersd.efficientmanim")
 
-# To run this code you need to install the following dependencies:
-# pip install google-genai PySide6 manim
+import struct
+
+# Audio handling
+try:
+    from pydub import AudioSegment
+    PYDUB_AVAILABLE = True
+except ImportError:
+    PYDUB_AVAILABLE = False
+    print("WARNING: pydub not found. Audio duration features will be disabled. 'pip install pydub'")
 
 import os
 from google import genai
@@ -455,6 +462,117 @@ class AIWorker(QThread):
     def handle_chunk(self, text):
         self.chunk_received.emit(text)
 
+# ==============================================================================
+# 4b. TTS WORKER (NEW)
+# ==============================================================================
+
+def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
+    """Helper to generate WAV header for Gemini PCM output."""
+    def parse_audio_mime_type(mime_type: str) -> dict:
+        bits_per_sample = 16
+        rate = 24000
+        parts = mime_type.split(";")
+        for param in parts:
+            param = param.strip()
+            if param.lower().startswith("rate="):
+                try:
+                    rate = int(param.split("=", 1)[1])
+                except: pass
+            elif param.startswith("audio/L"):
+                try:
+                    bits_per_sample = int(param.split("L", 1)[1])
+                except: pass
+        return {"bits_per_sample": bits_per_sample, "rate": rate}
+
+    parameters = parse_audio_mime_type(mime_type)
+    bits_per_sample = parameters["bits_per_sample"]
+    sample_rate = parameters["rate"]
+    num_channels = 1
+    data_size = len(audio_data)
+    bytes_per_sample = bits_per_sample // 8
+    block_align = num_channels * bytes_per_sample
+    byte_rate = sample_rate * block_align
+    chunk_size = 36 + data_size
+
+    header = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF", chunk_size, b"WAVE", b"fmt ", 16, 1, num_channels,
+        sample_rate, byte_rate, block_align, bits_per_sample,
+        b"data", data_size
+    )
+    return header + audio_data
+
+class TTSWorker(QThread):
+    finished_signal = Signal(str) # Path to saved file
+    error_signal = Signal(str)
+    
+    def __init__(self, text, voice_name, model_name):
+        super().__init__()
+        self.text = text
+        self.voice_name = voice_name
+        self.model_name = model_name
+        self.api_key = os.environ.get("GEMINI_API_KEY")
+
+    def run(self):
+        if not self.api_key:
+            self.error_signal.emit("API Key missing")
+            return
+
+        try:
+            client = genai.Client(api_key=self.api_key)
+            
+            # Construct Prompt
+            contents = [types.Content(role="user", parts=[types.Part.from_text(text=self.text)])]
+            
+            # Config
+            generate_content_config = types.GenerateContentConfig(
+                response_modalities=["audio"],
+                speech_config=types.SpeechConfig(
+                    voice_config=types.VoiceConfig(
+                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                            voice_name=self.voice_name
+                        )
+                    )
+                ),
+            )
+
+            # Stream & Collect
+            full_audio = b""
+            mime_type = "audio/wav" # Default
+
+            for chunk in client.models.generate_content_stream(
+                model=self.model_name,
+                contents=contents,
+                config=generate_content_config,
+            ):
+                if chunk.candidates and chunk.candidates[0].content.parts:
+                    part = chunk.candidates[0].content.parts[0]
+                    if part.inline_data:
+                        full_audio += part.inline_data.data
+                        if part.inline_data.mime_type:
+                            mime_type = part.inline_data.mime_type
+
+            if not full_audio:
+                self.error_signal.emit("No audio data received from Gemini.")
+                return
+
+            # Convert if necessary
+            final_data = full_audio
+            if "wav" not in mime_type:
+                final_data = convert_to_wav(full_audio, mime_type)
+
+            # Save to temp
+            filename = f"tts_{uuid.uuid4().hex[:8]}.wav"
+            save_path = AppPaths.TEMP_DIR / filename
+            
+            with open(save_path, "wb") as f:
+                f.write(final_data)
+                
+            self.finished_signal.emit(str(save_path))
+
+        except Exception as e:
+            self.error_signal.emit(str(e))
+
 class RenderWorker(QThread):
     """Manim CLI Runner."""
     success = Signal(str, str) # node_id, path
@@ -620,6 +738,8 @@ class NodeData:
         self.pos_x = 0
         self.pos_y = 0
         self.preview_path = None
+        # NEW: Voiceover support
+        self.audio_asset_id = None 
         # AI metadata
         self.is_ai_generated = False
         self.ai_source = None  # Original Manim class name
@@ -635,6 +755,7 @@ class NodeData:
             "param_metadata": self.param_metadata,
             "pos": (self.pos_x, self.pos_y),
             "preview_path": self.preview_path,
+            "audio_asset_id": self.audio_asset_id, # NEW
             "is_ai_generated": self.is_ai_generated,
             "ai_source": self.ai_source,
             "ai_code_snippet": self.ai_code_snippet
@@ -648,6 +769,7 @@ class NodeData:
         n.param_metadata = d.get("param_metadata", {})
         n.pos_x, n.pos_y = d["pos"]
         n.preview_path = d.get("preview_path")
+        n.audio_asset_id = d.get("audio_asset_id") # NEW
         n.is_ai_generated = d.get("is_ai_generated", False)
         n.ai_source = d.get("ai_source")
         n.ai_code_snippet = d.get("ai_code_snippet")
@@ -1119,6 +1241,46 @@ class ColorNormalizer:
     def normalize_to_hex(value):
         """Convert any color representation to hex string."""
         return TypeSafeParser.parse_color(value)
+    
+class GraphView(QGraphicsView):
+    """Custom View with Zoom (Ctrl+Wheel) and Pan (Middle Mouse) support."""
+    def __init__(self, scene):
+        super().__init__(scene)
+        self.setRenderHint(QPainter.Antialiasing)
+        self.setDragMode(QGraphicsView.RubberBandDrag)
+        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._is_panning = False
+
+    def wheelEvent(self, event):
+        """Handle Zoom with Ctrl + Scroll."""
+        if event.modifiers() & Qt.ControlModifier:
+            zoom_factor = 1.15
+            if event.angleDelta().y() > 0:
+                self.scale(zoom_factor, zoom_factor)
+            else:
+                self.scale(1 / zoom_factor, 1 / zoom_factor)
+        else:
+            super().wheelEvent(event)
+
+    def mousePressEvent(self, event):
+        """Handle Panning with Middle Mouse Button."""
+        if event.button() == Qt.MiddleButton:
+            self._is_panning = True
+            self.setDragMode(QGraphicsView.ScrollHandDrag)
+            # Create a dummy event to initiate the drag immediately
+            dummy = type(event)(event)
+            super().mousePressEvent(dummy)
+        else:
+            super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MiddleButton:
+            self._is_panning = False
+            self.setDragMode(QGraphicsView.RubberBandDrag)
+        super().mouseReleaseEvent(event)
 
 class PropertiesPanel(QWidget):
     """Enhanced inspector with type safety, parameter validation, and metadata columns."""
@@ -2417,6 +2579,153 @@ class AssetsPanel(QWidget):
         drag.setMimeData(mime)
         drag.exec(Qt.CopyAction)
 
+class VoiceoverPanel(QWidget):
+    """Panel for AI TTS generation and Node synchronization."""
+    
+    def __init__(self, main_window):
+        super().__init__()
+        self.main_window = main_window # Reference to access nodes
+        self.tts_worker = None
+        self.setup_ui()
+        
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        
+        # Header
+        header = QLabel("🎙️ AI Voiceover Studio")
+        header.setStyleSheet("font-size: 14px; font-weight: bold; color: #2c3e50;")
+        layout.addWidget(header)
+        
+        # Settings Grid
+        form = QFormLayout()
+        
+        # Model Selector
+        self.model_combo = QComboBox()
+        self.model_combo.addItems(["gemini-2.5-pro-preview-tts", "gemini-2.5-flash-preview-tts"])
+        # Load from settings
+        saved_model = SETTINGS.get("TTS_MODEL", "gemini-2.5-flash-preview-tts")
+        self.model_combo.setCurrentText(saved_model)
+        self.model_combo.currentTextChanged.connect(lambda t: SETTINGS.set("TTS_MODEL", t))
+        form.addRow("Model:", self.model_combo)
+        
+        # Voice Selector
+        self.voice_combo = QComboBox()
+        # Gemini Voices (Standard set)
+        voices = ["Puck", "Charon", "Kore", "Fenrir", "Aoede", "Zephyr"] 
+        self.voice_combo.addItems(voices)
+        self.voice_combo.setCurrentText("Zephyr")
+        form.addRow("Voice:", self.voice_combo)
+        
+        layout.addLayout(form)
+        
+        # Text Input
+        layout.addWidget(QLabel("Script:"))
+        self.text_input = QPlainTextEdit()
+        self.text_input.setPlaceholderText("Enter text to speak here...")
+        layout.addWidget(self.text_input)
+        
+        # Generate Button
+        self.btn_gen = QPushButton("⚡ Generate Audio")
+        self.btn_gen.setStyleSheet("background-color: #8e44ad; color: white; padding: 8px; font-weight: bold;")
+        self.btn_gen.clicked.connect(self.generate_audio)
+        layout.addWidget(self.btn_gen)
+        
+        # Separator
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setStyleSheet("color: #bdc3c7;")
+        layout.addWidget(line)
+        
+        # Node Sync Section
+        sync_lbl = QLabel("🔗 Sync to Animation")
+        sync_lbl.setStyleSheet("font-weight: bold;")
+        layout.addWidget(sync_lbl)
+        
+        self.node_combo = QComboBox()
+        self.node_combo.setPlaceholderText("Select an Animation Node...")
+        layout.addWidget(self.node_combo)
+        
+        # Refresh Nodes Button (in case new ones added)
+        btn_refresh = QPushButton("🔄 Refresh Node List")
+        btn_refresh.clicked.connect(self.refresh_nodes)
+        layout.addWidget(btn_refresh)
+        
+        self.status_lbl = QLabel("Ready")
+        self.status_lbl.setStyleSheet("color: gray;")
+        layout.addWidget(self.status_lbl)
+        
+        # Initial refresh
+        QTimer.singleShot(1000, self.refresh_nodes)
+
+    def refresh_nodes(self):
+        """Populate combo box with Animation nodes only."""
+        current_id = self.node_combo.currentData()
+        self.node_combo.clear()
+        
+        self.node_combo.addItem("-- Select Animation --", None)
+        
+        count = 0
+        for nid, node in self.main_window.nodes.items():
+            if node.data.type == NodeType.ANIMATION:
+                # Show Name and Class
+                name = f"{node.data.name} ({node.data.cls_name})"
+                self.node_combo.addItem(name, nid)
+                count += 1
+                
+        if current_id:
+            idx = self.node_combo.findData(current_id)
+            if idx >= 0: self.node_combo.setCurrentIndex(idx)
+            
+        self.status_lbl.setText(f"Found {count} animation nodes.")
+
+    def generate_audio(self):
+        text = self.text_input.toPlainText().strip()
+        if not text:
+            QMessageBox.warning(self, "Input Error", "Please enter some text.")
+            return
+            
+        self.btn_gen.setEnabled(False)
+        self.status_lbl.setText("Generating audio via Gemini...")
+        
+        voice = self.voice_combo.currentText()
+        model = self.model_combo.currentText()
+        
+        self.tts_worker = TTSWorker(text, voice, model)
+        self.tts_worker.finished_signal.connect(self.on_tts_success)
+        self.tts_worker.error_signal.connect(self.on_tts_error)
+        self.tts_worker.start()
+
+    def on_tts_success(self, file_path):
+        self.btn_gen.setEnabled(True)
+        self.status_lbl.setText("Audio generated!")
+        
+        # 1. Register as Asset
+        asset = ASSETS.add_asset(file_path)
+        if not asset:
+            self.status_lbl.setText("Error registering asset.")
+            return
+
+        # 2. Assign to Node (if selected)
+        node_id = self.node_combo.currentData()
+        if node_id and node_id in self.main_window.nodes:
+            node = self.main_window.nodes[node_id]
+            node.data.audio_asset_id = asset.id
+            node.update() # Refresh graph
+            self.status_lbl.setText(f"Saved & Synced to '{node.data.name}'")
+            
+            # Trigger graph re-compile to add the duration logic
+            self.main_window.compile_graph()
+            
+            QMessageBox.information(self, "Success", f"Audio generated and attached to {node.data.name}.\nRun Time will auto-fit.")
+        else:
+             QMessageBox.information(self, "Success", "Audio generated and added to Assets.\n(No node selected for sync)")
+
+    def on_tts_error(self, err):
+        self.btn_gen.setEnabled(True)
+        self.status_lbl.setText("Generation Failed.")
+        LOGGER.error(f"TTS Error: {err}")
+        QMessageBox.critical(self, "TTS Error", err)
+
 class KeyboardShortcutsDialog(QDialog):
     """Display keyboard shortcuts and help."""
     def __init__(self, parent=None):
@@ -2508,6 +2817,7 @@ class EfficientManimWindow(QMainWindow):
         self.nodes = {} 
         self.project_path = None
         self.undo_manager = UndoRedoManager()
+        self.project_modified = False # NEW: Track changes
         self.is_ai_generated_code = False  # Track if code came from AI (don't regenerate)
         
         AppPaths.ensure_dirs()
@@ -2537,21 +2847,24 @@ class EfficientManimWindow(QMainWindow):
         # LEFT
         self.scene = GraphScene()
         self.scene.selection_changed_signal.connect(self.on_selection)
-        # Auto-Refresh on Structure Change
+        
+        # NEW: Connect graph changes to modified tracker
+        self.scene.graph_changed_signal.connect(self.mark_modified) 
         self.scene.graph_changed_signal.connect(self.compile_graph)
         
-        self.view = QGraphicsView(self.scene)
-        self.view.setRenderHint(QPainter.Antialiasing)
-        self.view.setDragMode(QGraphicsView.RubberBandDrag)
+        # NEW: Use custom GraphView
+        self.view = GraphView(self.scene) 
         main.addWidget(self.view)
         
         # RIGHT
         right = QSplitter(Qt.Vertical)
         self.tabs_top = QTabWidget()
         
+       # NEW: Connect property changes to modified tracker
         self.panel_props = PropertiesPanel()
+        self.panel_props.node_updated.connect(self.mark_modified) # Track prop changes
         self.panel_props.node_updated.connect(self.on_node_changed)
-        
+
         self.panel_elems = ElementsPanel()
         self.panel_elems.add_requested.connect(self.add_node_center)
         
@@ -2563,11 +2876,21 @@ class EfficientManimWindow(QMainWindow):
         self.panel_ai = AIPanel()
         self.panel_ai.merge_requested.connect(self.merge_ai_code)
         
+        # NEW: Init Voiceover Panel
+        self.panel_voice = VoiceoverPanel(self)
+        
         self.tabs_top.addTab(self.panel_elems, "📦 Elements")
         self.tabs_top.addTab(self.panel_props, "🧩 Properties")
         self.tabs_top.addTab(self.panel_assets, "🗂 Assets")
-        self.tabs_top.addTab(self.panel_video, "🎬 Video")
+        
+        # AI Integration
         self.tabs_top.addTab(self.panel_ai, "🤖 AI")
+        # NEW: Add Voiceover Tab
+        self.tabs_top.addTab(self.panel_voice, "🎙️ Voiceover")
+        
+        # Video Rendering Tab
+        self.tabs_top.addTab(self.panel_video, "🎬 Video")
+
         right.addWidget(self.tabs_top)
         
         self.tabs_bot = QTabWidget()
@@ -2606,7 +2929,6 @@ class EfficientManimWindow(QMainWindow):
         main.setSizes([1000, 600])
 
     def setup_menu(self):
-        """Setup menu bar with all actions."""
         bar = self.menuBar()
         
         # File Menu
@@ -2620,6 +2942,11 @@ class EfficientManimWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction("Exit", self.close, QKeySequence.Quit)
         
+        quit_act = QAction("Exit", self)
+        quit_act.setShortcut(QKeySequence("Ctrl+Q"))
+        quit_act.triggered.connect(self.close)
+        file_menu.addAction(quit_act)
+
         # Edit Menu
         edit_menu = bar.addMenu("Edit")
         undo_action = QAction("Undo", self)
@@ -2640,9 +2967,23 @@ class EfficientManimWindow(QMainWindow):
         
         # View Menu
         view_menu = bar.addMenu("View")
-        view_menu.addAction("Fit to View", self.fit_view, QKeySequence(Qt.CTRL | Qt.Key_0))
-        view_menu.addAction("Clear All", self.clear_scene, QKeySequence(Qt.CTRL | Qt.ALT | Qt.Key_Delete))
+        view_menu.addAction("Fit to View", self.fit_view, QKeySequence("Ctrl+0"))
         
+        # NEW: Zoom Shortcuts
+        view_menu.addSeparator()
+        zoom_in_act = QAction("Zoom In", self)
+        zoom_in_act.setShortcut(QKeySequence("Ctrl+=")) # Standard Ctrl +
+        zoom_in_act.triggered.connect(lambda: self.view.scale(1.15, 1.15))
+        view_menu.addAction(zoom_in_act)
+        
+        zoom_out_act = QAction("Zoom Out", self)
+        zoom_out_act.setShortcut(QKeySequence("Ctrl+-"))
+        zoom_out_act.triggered.connect(lambda: self.view.scale(1/1.15, 1/1.15))
+        view_menu.addAction(zoom_out_act)
+        
+        view_menu.addSeparator()
+        view_menu.addAction("Clear All", self.clear_scene, QKeySequence(Qt.CTRL | Qt.ALT | Qt.Key_Delete))
+
         # Help Menu
         help_menu = bar.addMenu("Help")
         help_menu.addAction("Keyboard Shortcuts", self.show_shortcuts, QKeySequence(Qt.CTRL | Qt.Key_Question))
@@ -2678,6 +3019,47 @@ class EfficientManimWindow(QMainWindow):
             "A visual node-based Manim IDE with AI integration.\n\n"
             "© 2024 - Efficient Manim Team"
         )
+    
+    def mark_modified(self):
+        """Mark project as modified and update window title."""
+        self.project_modified = True
+        title = f"{APP_NAME} v{APP_VERSION}"
+        if self.project_path:
+            title += f" - {Path(self.project_path).name}"
+        title += " *" # Star indicates unsaved changes
+        self.setWindowTitle(title)
+
+    def reset_modified(self):
+        """Reset modified flag after save."""
+        self.project_modified = False
+        title = f"{APP_NAME} v{APP_VERSION}"
+        if self.project_path:
+            title += f" - {Path(self.project_path).name}"
+        self.setWindowTitle(title)
+
+    def closeEvent(self, event):
+        """Intercept close event to check for unsaved changes."""
+        if self.project_modified and self.nodes:
+            reply = QMessageBox.question(
+                self, 
+                "Unsaved Changes", 
+                "You have unsaved changes. Do you want to save before quitting?",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel
+            )
+
+            if reply == QMessageBox.Save:
+                self.save_project()
+                # If save was cancelled inside save_project, ignore close
+                if self.project_modified: 
+                    event.ignore()
+                else:
+                    event.accept()
+            elif reply == QMessageBox.Discard:
+                event.accept()
+            else:
+                event.ignore()
+        else:
+            event.accept()
 
     def undo_action(self):
         """Undo last action."""
@@ -2784,22 +3166,21 @@ class EfficientManimWindow(QMainWindow):
     def compile_graph(self):
         if self.is_ai_generated_code:
             return self.code_view.toPlainText()
-        """Topological-ish generation logic with type safety and parameter filtering."""
-        code = "from manim import *\nimport numpy as np\n\nclass EfficientScene(Scene):\n    def construct(self):\n"
+        
+        code = "from manim import *\nimport numpy as np\n"
+        if PYDUB_AVAILABLE:
+            code += "from pydub import AudioSegment\n"
+        
+        code += "\nclass EfficientScene(Scene):\n    def construct(self):\n"
 
-        # 1. Instantiate Mobjects with type-safe parameter handling
+        # 1. Instantiate Mobjects
         mobjects = [n for n in self.nodes.values() if n.data.type == NodeType.MOBJECT]
         m_vars = {}
         for m in mobjects:
             args = []
             for k, v in m.data.params.items():
                 if k.startswith("_"): continue
-                
-                # Skip disabled parameters
-                if not m.data.is_param_enabled(k):
-                    continue
-                
-                # Type-safe value formatting
+                if not m.data.is_param_enabled(k): continue
                 v_clean = self._format_param_value(k, v, m.data)
                 args.append(f'{k}={v_clean}')
                 
@@ -2808,7 +3189,7 @@ class EfficientManimWindow(QMainWindow):
             code += f"        {var} = {m.data.cls_name}({', '.join(args)})\n"
             code += f"        self.add({var})\n"
 
-        # 2. Group animations with safe parameter handling
+        # 2. Group animations
         animations = [n for n in self.nodes.values() if n.data.type == NodeType.ANIMATION]
         played = set()
         
@@ -2829,19 +3210,48 @@ class EfficientManimWindow(QMainWindow):
             if not ready_anims:
                 break
 
-            play_args = []
+            play_lines = []
+            
+            # Process this batch of animations
             for anim, targets in ready_anims:
                 anim_args = targets.copy()
+                
+                # Check for Voiceover Sync
+                audio_path = None
+                duration_var = None
+                
+                if anim.data.audio_asset_id:
+                    path = ASSETS.get_asset_path(anim.data.audio_asset_id)
+                    if path and PYDUB_AVAILABLE:
+                        # Clean path for Python string
+                        clean_path = path.replace("\\", "/")
+                        
+                        # Inject Audio Logic
+                        audio_var = f"audio_{anim.data.id[:6]}"
+                        code += f"        # Voiceover for {anim.data.name}\n"
+                        code += f"        self.add_sound(r'{clean_path}')\n"
+                        code += f"        {audio_var} = AudioSegment.from_file(r'{clean_path}')\n"
+                        
+                        # Override run_time parameter
+                        anim.data.params['run_time'] = f"{audio_var}.duration_seconds"
+                
+                # Format parameters
                 for k, v in anim.data.params.items():
                     if not k.startswith("_") and anim.data.is_param_enabled(k):
-                        v_clean = self._format_param_value(k, v, anim.data)
-                        anim_args.append(f"{k}={v_clean}")
+                        if k == 'run_time' and isinstance(v, str) and "duration_seconds" in v:
+                             # It's a variable reference we just injected, don't format it as a string
+                             anim_args.append(f"{k}={v}")
+                        else:
+                             v_clean = self._format_param_value(k, v, anim.data)
+                             anim_args.append(f"{k}={v_clean}")
                 
-                play_args.append(f"{anim.data.cls_name}({', '.join(anim_args)})")
+                play_lines.append(f"{anim.data.cls_name}({', '.join(anim_args)})")
                 played.add(anim)
 
-            if play_args:
-                code += f"        self.play({', '.join(play_args)})\n"
+            if play_lines:
+                code += f"        self.play({', '.join(play_lines)})\n"
+                # Add a small wait after animations to prevent audio cutoff
+                code += f"        self.wait(0.5)\n"
 
             animations = [a for a in animations if a not in played]
 

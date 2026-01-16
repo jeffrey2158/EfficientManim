@@ -1,3 +1,4 @@
 google-genai
+pydub
 PySide6
 manim

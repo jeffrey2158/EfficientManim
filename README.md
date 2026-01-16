@@ -9,29 +9,31 @@
 
 ### 🎬 Node-Based Workflow
 *   **Visual Editor:** Drag and drop Mobjects and Animations. Wire them together to create logic flows.
-*   **Smart Connections:** The system prevents invalid connections (e.g., connecting two Mobjects directly without an animation).
+*   **Infinite Canvas:** Infinite panning and zooming canvas to manage large node graphs.
 *   **Live Preview:** See static previews of individual nodes as you tweak parameters.
+
+### 🎙️ AI Voiceover Studio (New)
+*   **Gemini TTS Integration:** Generate realistic voiceovers using Google's Gemini 2.5 models.
+*   **Auto-Sync:** Automatically synchronizes animation duration to the generated audio length.
+*   **Multi-Voice:** Choose from varied voices (Zephyr, Puck, Fenrir, etc.).
 
 ### 📦 Portable Project Format (.efp)
 *   **Bundled Assets:** Images, sounds, and videos are automatically copied and zipped into the project file.
-*   **Cross-Platform:** Projects created on Windows work on Linux/Mac. The system automatically handles path conversions (e.g., converting backslashes to forward slashes for Manim).
-*   **Self-Contained:** Share a single `.efp` file without worrying about broken file paths.
+*   **Cross-Platform:** Projects created on Windows work on Linux/Mac. The system automatically handles path conversions.
 
 ### 🛡️ Robust Type Safety System
 *   **Smart Parsing:** Automatically distinguishes between numeric values, colors, vectors, and asset file paths.
 *   **Crash Prevention:** Prevents "ufunc" errors by validating inputs before they reach the Manim renderer.
-*   **ImageMobject Support:** Correctly handles UUIDs vs. Filenames to ensure images render without numeric conversion errors.
-*   **Color Normalization:** Accepts Hex, RGB tuples, or Manim constants (e.g., `RED`, `BLUE`) and standardizes them.
+*   **ImageMobject Support:** Correctly handles UUIDs vs. Filenames to ensure images render correctly.
 
 ### 🤖 Gemini AI Integration
 *   **Text-to-Animation:** Describe an animation in plain English, and the AI generates the node graph.
-*   **Node Extraction:** The AI code is parsed into editable nodes (Mobjects and Animations) rather than just a black box of code.
-*   **Merger Logic:** AI-generated nodes are fully integrated into the existing scene graph with preserved parameters.
+*   **Node Extraction:** The AI code is parsed into editable nodes (Mobjects and Animations).
+*   **Merger Logic:** AI-generated nodes are fully integrated into the existing scene graph.
 
 ### 🎬 Professional Video Rendering
 *   **Full Scene Export:** Render your complete node graph to MP4/WebM.
-*   **Custom Settings:** Control Resolution (up to 4K), Framerate (15-60 FPS), and Render Quality (Low to Ultra).
-*   **Background Processing:** Rendering happens in a separate thread, keeping the UI responsive.
+*   **Custom Settings:** Control Resolution (up to 4K), Framerate (15-60 FPS), and Render Quality.
 
 ---
 
@@ -39,72 +41,62 @@
 
 ### 1. The Graph Editor
 The central canvas where you arrange your scene.
-*   **Mobjects (Blue Headers):** Objects like Circles, Text, Images.
-*   **Animations (Purple Headers):** Actions like FadeIn, Transform, Rotate.
-*   **Connections:** Define the flow of the animation.
+*   **Pan:** Hold **Middle Mouse Button** or **Shift+Drag** to move around.
+*   **Zoom:** Use **Ctrl + Scroll** to zoom in and out.
+*   **Select:** Left click and drag to rubber-band select nodes.
 
 ### 2. The Enhanced Inspector
 A powerful 3-column property editor located on the right.
-*   **Value Input:** Context-aware widgets (Color pickers for colors, File selectors for assets, Spinners for numbers).
-*   **Enabled Checkbox:** Toggle parameters on/off. Unchecked parameters are excluded from the generated Python code.
-*   **Escape Checkbox:** When checked, removes quotes from string values (useful for passing variable names or raw Python objects).
+*   **Value Input:** Context-aware widgets (Color pickers, File selectors, Spinners).
+*   **Enabled Checkbox:** Toggle parameters on/off.
+*   **Escape Checkbox:** Removes quotes from string values (for variables).
 
-### 3. Asset Manager
-*   **Drag & Drop:** Import images and sounds easily.
-*   **Auto-Link:** Assets are referenced by ID, ensuring links survive file renaming or project movement.
+### 3. Voiceover & Assets
+*   **Voiceover Tab:** Generate TTS audio and attach it directly to specific animation nodes.
+*   **Asset Manager:** Drag & Drop images/sounds. Assets are auto-linked by ID.
 
 ---
 
 ## ⚙️ Example Workflow
 
 1.  **Import Assets:** Go to the Assets tab and import a `.png` file.
-2.  **Add Nodes:**
-    *   Add an `ImageMobject` node.
-    *   In the Inspector, select your imported image from the dropdown.
-    *   Add a `FadeIn` animation node.
-3.  **Connect:** Wire the `ImageMobject` output to the `FadeIn` input.
-4.  **Preview:** Select the `ImageMobject` to see a static preview in the bottom-left panel.
-5.  **Render:** Go to the Video tab, select 1080p/60FPS, and click **Render Full Scene**.
+2.  **Add Nodes:** Add an `ImageMobject` and a `FadeIn` animation.
+3.  **Voiceover:** 
+    *   Go to the **Voiceover** tab.
+    *   Type a script and click **Generate Audio**.
+    *   Select the `FadeIn` node in the "Sync" dropdown.
+    *   The animation will now last exactly as long as the spoken text.
+4.  **Connect:** Wire the nodes together.
+5.  **Render:** Go to the Video tab and export your video.
 
 ---
 
 ## ⌨️ Keyboard Shortcuts
 
 ### 📁 File Operations
-| Action | Windows/Linux | macOS | Description |
-| :--- | :--- | :--- | :--- |
-| **New Project** | `Ctrl` + `N` | `Cmd` + `N` | Clears the current project to start a new one. |
-| **Open Project** | `Ctrl` + `O` | `Cmd` + `O` | Open an existing `.efp` project file. |
-| **Save Project** | `Ctrl` + `S` | `Cmd` + `S` | Save the current project. |
-| **Exit** | `Ctrl` + `Q` | `Cmd` + `Q` | Close the application. |
+| Action | Shortcut | Description |
+| :--- | :--- | :--- |
+| **New Project** | `Ctrl` + `N` | Clears the current project. |
+| **Open Project** | `Ctrl` + `O` | Open an existing `.efp` project. |
+| **Save Project** | `Ctrl` + `S` | Save the current project. |
+| **Exit** | `Ctrl` + `Q` | Quit (Prompts to save if modified). |
 
 ### ✏️ Editing
-| Action | Windows/Linux | macOS | Description |
-| :--- | :--- | :--- | :--- |
-| **Undo** | `Ctrl` + `Z` | `Cmd` + `Z` | Undo the last action. |
-| **Redo** | `Ctrl` + `Y` *or* `Ctrl` + `Shift` + `Z` | `Cmd` + `Shift` + `Z` | Redo the last undone action. |
-| **Delete** | `Delete` | `Delete` / `Fn` + `Backspace` | Delete the selected nodes or wires. |
+| Action | Shortcut | Description |
+| :--- | :--- | :--- |
+| **Undo** | `Ctrl` + `Z` | Undo the last action. |
+| **Redo** | `Ctrl` + `Y` | Redo the last undone action. |
+| **Delete** | `Delete` | Delete the selected nodes/wires. |
 
 ### 👁️ View & Canvas
-| Action | Windows/Linux | macOS | Description |
-| :--- | :--- | :--- | :--- |
-| **Fit View** | `Ctrl` + `0` | `Cmd` + `0` | Zooms and pans the camera to fit all nodes on screen. |
-| **Clear All** | `Ctrl` + `Alt` + `Delete` | `Cmd` + `Opt` + `Delete` | Deletes **all** nodes and wires from the canvas. |
-
-### ❓ Help
-| Action | Windows/Linux | macOS | Description |
-| :--- | :--- | :--- | :--- |
-| **Shortcuts** | `Ctrl` + `?` | `Cmd` + `?` | Opens the Keyboard Shortcuts reference dialog. |
-
----
-
-## 🐛 Error Handling & Logs
-
-EfficientManim includes a comprehensive logging system (visible in the "Logs" tab):
-*   **MANIM logs:** Capture render errors directly from the Manim CLI.
-*   **AI logs:** Track generation status and merging issues.
-*   **System logs:** Monitor file I/O and asset loading.
-*   **Session Log:** A `session.log` file is maintained in your User Data folder for debugging crashes.
+| Action | Shortcut | Description |
+| :--- | :--- | :--- |
+| **Zoom In** | `Ctrl` + `+` | Zoom into the canvas. |
+| **Zoom Out** | `Ctrl` + `-` | Zoom out of the canvas. |
+| **Mouse Zoom** | `Ctrl` + `Scroll` | Smooth zoom at mouse position. |
+| **Pan** | `Middle Mouse` | Drag canvas to pan. |
+| **Fit View** | `Ctrl` + `0` | Fit all nodes on screen. |
+| **Clear All** | `Ctrl` + `Alt` + `Del` | Deletes **all** nodes and wires. |
 
 ---
 
@@ -112,17 +104,17 @@ EfficientManim includes a comprehensive logging system (visible in the "Logs" ta
 
 ### Prerequisites
 *   Python 3.10+
-*   [Manim Community](https://www.manim.community/) (`pip install manim`)
-*   [FFmpeg](https://ffmpeg.org/) (Required by Manim)
+*   [Manim Community](https://www.manim.community/)
+*   [FFmpeg](https://ffmpeg.org/)
+*   **Optional:** `pydub` (Required for Voiceover auto-sync features)
 
 ### Installation
 ```bash
 # 1. Install Dependencies
-pip install PySide6 manim google-genai
+pip install PySide6 manim google-genai pydub
 
 # 2. Run the Application
 python main.py
-```
 
 ## 📸 Screenshots
 
