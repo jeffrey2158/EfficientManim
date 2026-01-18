@@ -1,0 +1,57 @@
+name: Python Validate & Build
+
+on:
+  push:
+    paths:
+      - 'requirements.txt'
+      - 'pyproject.toml'
+      - '.github/workflows/python-validate.yml'
+  pull_request:
+    paths:
+      - 'requirements.txt'
+      - 'pyproject.toml'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.12
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libcairo2-dev \
+            libpango1.0-dev \
+            libgdk-pixbuf2.0-dev \
+            libffi-dev \
+            shared-mime-info
+
+      - name: Install pip-tools
+        run: pip install --upgrade pip pip-tools
+
+      - name: Validate requirements
+        id: validate
+        run: |
+          if pip-compile --dry-run -o requirements.out requirements.txt; then
+            echo "::debug::Python validate no broken dependencies"
+            echo "valid=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            echo "### :warning: Python validation failed in repository root" >> $GITHUB_STEP_SUMMARY
+            echo "We were unable to validate a Python project in the repository root. Make sure all system dependencies are installed." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+      - name: Auto-approve Dependabot PRs
+        if: github.actor == 'dependabot[bot]' && steps.validate.outputs.valid == 'true'
+        uses: hmarr/auto-approve-action@v2.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          
