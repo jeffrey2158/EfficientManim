@@ -79,9 +79,9 @@ from PySide6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsItem, QGraphicsPathItem,
     QLabel, QLineEdit, QSpinBox, QDoubleSpinBox,
     QCheckBox, QPushButton, QDialog, QFormLayout, QComboBox, QColorDialog,
-    QScrollArea, QFrame, QMessageBox,
+    QScrollArea, QFrame, QMessageBox, QMenu,
     QFileDialog, QListWidget, QListWidgetItem,
-    QStyle, QSlider
+    QStyle, QSlider, QGroupBox
 )
 from PySide6.QtCore import (
     Qt, Signal, QObject, QThread, QPointF, QRectF, QTimer,
@@ -89,7 +89,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QAction, QColor, QPen, QBrush, QFont, QPainter, QPixmap, QKeySequence, QFontDatabase, QIcon, QPainterPath,
-    QDrag, QTextCursor
+    QDrag, QTextCursor, QImage
 )
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -224,8 +224,12 @@ class SettingsManager(QObject):
         self._store = QSettings("Gemini", "EfficientManim")
         self.apply_env()
 
-    def get(self, key, default=None):
-        return self._store.value(key, default)
+    # FIX: Added 'type' parameter to handle booleans correctly
+    def get(self, key, default=None, type=None):
+        val = self._store.value(key, default)
+        if type == bool:
+            return str(val).lower() == 'true'
+        return val
 
     def set(self, key, value):
         self._store.setValue(key, value)
@@ -449,6 +453,27 @@ class KeyboardShortcuts:
 # 4a. WORKER THREADS
 # ==============================================================================
 
+class ImageLoaderWorker(QThread):
+    """Loads and scales image in background to keep UI smooth."""
+    image_loaded = Signal(QPixmap)
+
+    def __init__(self, path, max_width):
+        super().__init__()
+        self.path = path
+        self.max_width = max_width
+
+    def run(self):
+        if not os.path.exists(self.path):
+            return
+            
+        image = QImage(self.path)
+        if not image.isNull():
+            # Scale here to save memory on main thread
+            pixmap = QPixmap.fromImage(image)
+            if pixmap.width() > self.max_width:
+                pixmap = pixmap.scaledToWidth(self.max_width, Qt.SmoothTransformation)
+            self.image_loaded.emit(pixmap)
+
 class AIWorker(QThread):
     chunk_received = Signal(str)
     finished_signal = Signal()
@@ -611,8 +636,8 @@ class TTSWorker(QThread):
             self.error_signal.emit(str(e))
 
 class RenderWorker(QThread):
-    """Manim CLI Runner."""
-    success = Signal(str, str) # node_id, path
+    """Fast, single-frame renderer for Node Previews."""
+    success = Signal(str, str) # node_id, absolute_path
     error = Signal(str)
     
     def __init__(self, script_path, node_id, output_dir, fps, quality):
@@ -620,21 +645,22 @@ class RenderWorker(QThread):
         self.script_path = script_path
         self.node_id = node_id
         self.output_dir = output_dir
-        self.fps = fps
-        self.quality = quality # l, m, h, k
+        self.quality = quality
 
     def run(self):
         try:
-            # Construct Command
-            # manim -s -ql --format=png --disable_caching script.py Scene
+            print(f"[Preview] Starting render for {self.node_id}...")
             
-            flags = ["-s", "--format=png", "--disable_caching"]
+            # Ensure output dir exists
+            if not self.output_dir.exists():
+                self.output_dir.mkdir(parents=True)
+
+            flags = ["-s", "--format=png", "--disable_caching", "-r", "400,300"]
             flags.append(f"-q{self.quality}")
-            flags.append(f"--fps={self.fps}")
             
             cmd = ["manim"] + flags + [str(self.script_path), "PreviewScene"]
+            print(f"[Preview] Command: {' '.join(cmd)}")
             
-            # Windows: hide console window
             startupinfo = None
             if platform.system() == "Windows":
                 startupinfo = subprocess.STARTUPINFO()
@@ -650,22 +676,34 @@ class RenderWorker(QThread):
             
             if process.returncode != 0:
                 err = process.stderr if process.stderr else process.stdout
-                self.error.emit(f"Manim Error:\n{err}")
+                print(f"[Preview] FAILED. Error: {err}")
+                self.error.emit(f"Manim Failed: {err[:50]}...")
                 return
 
-            # Locate Output
+            print("[Preview] Manim process finished.")
+            
+            # Search for the output file
+            # Manim structure: /media/images/PreviewScene/PreviewScene_ManimCE_v0.18.1.png
+            # Or simplified: /media/images/PreviewScene.png
+            
             media_dir = self.output_dir / "media"
+            print(f"[Preview] Searching in: {media_dir}")
+            
             pngs = list(media_dir.rglob("*.png"))
+            print(f"[Preview] Found {len(pngs)} PNGs.")
             
             if pngs:
-                # Get latest
                 latest = max(pngs, key=os.path.getmtime)
-                self.success.emit(self.node_id, str(latest))
+                abs_path = str(latest.absolute())
+                print(f"[Preview] Success! Path: {abs_path}")
+                self.success.emit(self.node_id, abs_path)
             else:
-                self.error.emit("Render finished but no PNG output found.")
+                print("[Preview] Error: No PNGs found after render.")
+                self.error.emit("No PNG generated.")
 
         except Exception as e:
-            self.error.emit(f"Worker Exception: {e}")
+            print(f"[Preview] Exception: {e}")
+            self.error.emit(str(e))
 
 class VideoRenderWorker(QThread):
     """Renders full scenes to MP4/WebM video using Manim."""
@@ -1278,14 +1316,122 @@ class ColorNormalizer:
         """Convert any color representation to hex string."""
         return TypeSafeParser.parse_color(value)
 
+class SceneOutlinerPanel(QWidget):
+    """Lists all nodes in the scene for easy selection and management."""
+    
+    def __init__(self, main_window):
+        super().__init__()
+        self.main_window = main_window
+        self.setup_ui()
+        
+        # Connect to scene changes to auto-refresh
+        self.main_window.scene.graph_changed_signal.connect(self.refresh_list)
+
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        
+        # Search Bar
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("🔍 Filter nodes...")
+        self.search.textChanged.connect(self.refresh_list)
+        layout.addWidget(self.search)
+        
+        # The List
+        self.list_widget = QListWidget()
+        self.list_widget.setSelectionMode(QListWidget.ExtendedSelection)
+        self.list_widget.itemClicked.connect(self.on_item_clicked)
+        # Context menu for deleting
+        self.list_widget.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list_widget.customContextMenuRequested.connect(self.show_context_menu)
+        layout.addWidget(self.list_widget)
+        
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_del = QPushButton("🗑️ Delete")
+        btn_del.clicked.connect(self.delete_selected)
+        btn_layout.addWidget(btn_del)
+        
+        btn_refresh = QPushButton("🔄 Refresh")
+        btn_refresh.clicked.connect(self.refresh_list)
+        btn_layout.addWidget(btn_refresh)
+        
+        layout.addLayout(btn_layout)
+
+    def refresh_list(self):
+        """Rebuild the list based on current nodes."""
+        self.list_widget.clear()
+        filter_text = self.search.text().lower()
+        
+        # Sort nodes by creation order (roughly) or name
+        nodes = list(self.main_window.nodes.values())
+        
+        for node in nodes:
+            # Filter
+            if filter_text and filter_text not in node.data.name.lower():
+                continue
+                
+            # Create Item
+            icon_char = "📦" if node.data.type == NodeType.MOBJECT else "🎬"
+            display_text = f"{icon_char} {node.data.name} ({node.data.cls_name})"
+            
+            item = QListWidgetItem(display_text)
+            item.setData(Qt.UserRole, node.data.id)
+            
+            # Highlight if selected in scene
+            if node.isSelected():
+                item.setBackground(QColor("#d6eaf8")) # Light blue
+                
+            self.list_widget.addItem(item)
+
+    def on_item_clicked(self, item):
+        """Select the node in the scene when clicked in the list."""
+        node_id = item.data(Qt.UserRole)
+        if node_id in self.main_window.nodes:
+            # Deselect all first
+            for n in self.main_window.nodes.values():
+                n.setSelected(False)
+            
+            # Select target
+            node = self.main_window.nodes[node_id]
+            node.setSelected(True)
+            
+            # Focus view on node
+            self.main_window.view.centerOn(node)
+            self.main_window.on_selection() # Trigger property panel update
+
+    def delete_selected(self):
+        """Delete nodes selected in the list."""
+        ids_to_delete = []
+        for item in self.list_widget.selectedItems():
+            ids_to_delete.append(item.data(Qt.UserRole))
+            
+        if not ids_to_delete: return
+        
+        reply = QMessageBox.question(self, "Delete", f"Delete {len(ids_to_delete)} items?", QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            for nid in ids_to_delete:
+                if nid in self.main_window.nodes:
+                    self.main_window.remove_node(self.main_window.nodes[nid])
+            self.refresh_list()
+            self.main_window.compile_graph()
+
+    def show_context_menu(self, pos):
+        menu = QMenu()
+        del_act = menu.addAction("Delete")
+        action = menu.exec(self.list_widget.mapToGlobal(pos))
+        if action == del_act:
+            self.delete_selected()
+
 class LatexEditorPanel(QWidget):
     """Panel for Live LaTeX editing via API."""
     
     def __init__(self, main_window):
         super().__init__()
         self.main_window = main_window
-        self.worker = None
         self.temp_preview_path = AppPaths.TEMP_DIR / "latex_preview.png"
+        
+        # FIX: Keep track of all active threads to prevent Garbage Collection crashes
+        self._active_workers = set()
         
         self.setup_ui()
         
@@ -1311,13 +1457,13 @@ class LatexEditorPanel(QWidget):
         self.editor.textChanged.connect(self.on_text_changed)
         layout.addWidget(self.editor)
         
-        # Preview Area (Using Label as Media Widget for PNG)
+        # Preview Area
         self.preview_lbl = QLabel("Preview will appear here...")
         self.preview_lbl.setAlignment(Qt.AlignCenter)
         self.preview_lbl.setStyleSheet("background: white; border: 2px dashed #bdc3c7; border-radius: 4px;")
         self.preview_lbl.setMinimumHeight(150)
         
-        # Scroll area for large formulas
+        # Scroll area
         scroll = QScrollArea()
         scroll.setWidget(self.preview_lbl)
         scroll.setWidgetResizable(True)
@@ -1363,36 +1509,49 @@ class LatexEditorPanel(QWidget):
         if not tex: return
         
         self.status_lbl.setText("Fetching render from API...")
-        self.worker = LatexApiWorker(tex)
-        self.worker.success.connect(self.on_render_success)
-        self.worker.error.connect(self.on_render_error)
-        self.worker.start()
+        
+        # FIX: Create a new worker and track it
+        worker = LatexApiWorker(tex)
+        worker.success.connect(self.on_render_success)
+        worker.error.connect(self.on_render_error)
+        
+        # FIX: Clean up reference when done
+        worker.finished.connect(lambda: self._cleanup_worker(worker))
+        
+        # Add to active set so Python doesn't delete it while it's running
+        self._active_workers.add(worker)
+        worker.start()
+
+    def _cleanup_worker(self, worker):
+        """Remove worker from active set to allow Garbage Collection."""
+        if worker in self._active_workers:
+            self._active_workers.remove(worker)
+        worker.deleteLater()
 
     def on_render_success(self, image_data):
         self.status_lbl.setText("Render received.")
         
-        # 1. Save PNG as requested
         try:
             with open(self.temp_preview_path, "wb") as f:
                 f.write(image_data)
         except Exception as e:
             LOGGER.warn(f"Could not cache LaTeX png: {e}")
 
-        # 2. Display in UI
         pixmap = QPixmap()
         pixmap.loadFromData(image_data)
         
-        # Scale if too large
         if pixmap.width() > self.preview_lbl.width():
             pixmap = pixmap.scaledToWidth(self.preview_lbl.width() - 20, Qt.SmoothTransformation)
             
         self.preview_lbl.setPixmap(pixmap)
-        self.preview_lbl.setText("") # Clear text
+        self.preview_lbl.setText("")
 
     def on_render_error(self, err_msg):
         self.status_lbl.setText("API Error.")
-        self.preview_lbl.setText(f"❌ Error:\n{err_msg}")
-        self.preview_lbl.setPixmap(QPixmap()) # Clear image
+        # Only show error if it's not just a cancellation
+        if "Network" in err_msg or "400" in err_msg:
+             self.preview_lbl.setText(f"❌ Error:\n{err_msg}")
+             self.preview_lbl.setPixmap(QPixmap())
 
     def refresh_nodes(self):
         """Populate combo with nodes that look like they accept text."""
@@ -1401,10 +1560,12 @@ class LatexEditorPanel(QWidget):
         
         count = 0
         for nid, node in self.main_window.nodes.items():
-            # Filter for Text/Tex/MathTex nodes
             cname = node.data.cls_name.lower()
             if "tex" in cname or "text" in cname or "label" in cname:
-                self.node_combo.addItem(f"{node.data.name} ({node.data.cls_name})", nid)
+                # FIX: Format as "Name (First 6 chars of ID)"
+                short_id = nid[:6]
+                display_text = f"{node.data.name} ({short_id})"
+                self.node_combo.addItem(display_text, nid)
                 count += 1
                 
         if current:
@@ -1414,6 +1575,7 @@ class LatexEditorPanel(QWidget):
         self.status_lbl.setText(f"Found {count} text-compatible nodes.")
 
     def apply_to_node(self):
+        """Inject the LaTeX code into the selected node."""
         node_id = self.node_combo.currentData()
         if not node_id or node_id not in self.main_window.nodes:
             QMessageBox.warning(self, "Error", "Please select a valid target node.")
@@ -1423,7 +1585,7 @@ class LatexEditorPanel(QWidget):
         if not tex_code:
             return
 
-        # Balance parentheses: remove unmatched closing ')' at the end
+        # Balance parentheses
         open_count = 0
         balanced_tex = ""
         for char in tex_code:
@@ -1436,38 +1598,41 @@ class LatexEditorPanel(QWidget):
                     balanced_tex += char
             else:
                 balanced_tex += char
-        # Add missing ')' for unmatched '('
         balanced_tex += ')' * open_count
 
         node = self.main_window.nodes[node_id]
 
+        # Cleanup conflicting params
         for k in ("tex_strings", "arg0", "arg1", "t"):
             node.data.params.pop(k, None)
 
-        # FIXED: Escape backslashes BEFORE creating the raw string
+        # Escape backslashes
         safe_tex = balanced_tex.replace('\\', '\\\\')
         
-        # FIXED: Use raw string literal format that will work in code generation
-        # Store as a properly escaped string that _format_param_value can handle
+        # Use raw string literal format
         formatted_code = f'r"""{safe_tex}"""'
 
+        target_param = "text"
         if node.data.cls_name == "MathTex":
-            # Store the formatted string value
-            node.data.params["arg0"] = formatted_code
-            # IMPORTANT: Mark this parameter to NOT be quoted again during code generation
-            node.data.set_escape_string("arg0", True)
+            target_param = "arg0"
         elif node.data.cls_name == "Text":
-            node.data.params["text"] = formatted_code
-            node.data.set_escape_string("text", True)
-        else:
-            node.data.params["text"] = formatted_code
-            node.data.set_escape_string("text", True)
+            target_param = "text"
+
+        node.data.params[target_param] = formatted_code
+        
+        # Configure Metadata
+        node.data.set_escape_string(target_param, True)
+        node.data.set_param_enabled(target_param, True)
 
         node.update()
         self.main_window.compile_graph()
         self.status_lbl.setText(f"Applied to {node.data.name}!")
+        
         node.setSelected(True)
         self.main_window.on_selection()
+        
+        # Trigger re-render
+        self.main_window.queue_render(node)
 
 class VideoOutputPanel(QWidget):
     """Integrated Video Player with Seek and Play/Pause controls."""
@@ -1724,13 +1889,17 @@ class PropertiesPanel(QWidget):
             for name, param in sig.parameters.items():
                 if name in ['self', 'args', 'kwargs', 'mobject']: continue
                 
+                # Check default value
                 val = node_item.data.params.get(name, param.default)
                 if val is inspect.Parameter.empty: val = None
                 
+                # FIX: Disable 'tex_strings' by default if not explicitly set
+                if name == "tex_strings":
+                    # Only disable if it wasn't manually enabled by user previously
+                    if name not in node_item.data.param_metadata:
+                         node_item.data.set_param_enabled(name, False)
+                
                 row_widget = self.create_parameter_row(name, val, param.annotation)
-                if row_widget:
-                    self.form.addRow(name, row_widget)
-                    self.active_widgets[name] = row_widget
                     
         except Exception as e:
             LOGGER.error(f"Inspector Error for {node_item.data.cls_name}: {e}")
@@ -1803,7 +1972,44 @@ class PropertiesPanel(QWidget):
                 LOGGER.warn(f"Value change error for {key}: {e}")
 
         try:
-            # 1. ASSET PATHS (Corrected detection)
+            #  1. SPECIAL: Target Mobject Selector
+            # Check for keys like "mobject", "vmobject", "mobjects"
+            key_lower = key.lower()
+            target_keywords = ["mobject", "vmobject", "target", "object"]
+            
+            # Logic: If it's an Animation node AND key contains one of the keywords
+            is_anim = self.current_node.data.type == NodeType.ANIMATION
+            is_target_param = any(k in key_lower for k in target_keywords)
+            
+            if is_anim and is_target_param:
+                combo = QComboBox()
+                combo.addItem("-- Select Target --", None)
+                
+                # Scan main window nodes for Mobjects
+                # Note: We need a way to access main_window nodes. 
+                # Ideally pass main_window to PropertiesPanel or access via scene items.
+                scene = self.current_node.scene()
+                if scene:
+                    for item in scene.items():
+                        if isinstance(item, NodeItem) and item.data.type == NodeType.MOBJECT:
+                            # Add Mobject to dropdown
+                            display_name = f"📦 {item.data.name} ({item.data.id[:4]})"
+                            combo.addItem(display_name, item.data.id)
+
+                # Set current value
+                if value:
+                    idx = combo.findData(value)
+                    if idx >= 0: 
+                        combo.setCurrentIndex(idx)
+                
+                # AUTO-CONFIGURE: Enable and Escape by default
+                self.current_node.data.set_param_enabled(key, True)
+                self.current_node.data.set_escape_string(key, True) 
+                
+                combo.currentIndexChanged.connect(lambda i: on_change(combo.itemData(i)))
+                return combo
+
+            # 2. ASSET PATHS
             if TypeSafeParser.is_asset_param(key):
                 combo = QComboBox()
                 combo.addItem("(None)", None)
@@ -1818,7 +2024,7 @@ class PropertiesPanel(QWidget):
                 combo.currentIndexChanged.connect(lambda i: on_change(combo.itemData(i)))
                 return combo
 
-            # 2. COLORS
+            # 3. COLORS
             if TypeSafeParser.is_color_param(key):
                 # ... (Keep existing color logic) ...
                 btn = QPushButton("Pick Color")
@@ -1835,7 +2041,7 @@ class PropertiesPanel(QWidget):
                 btn.clicked.connect(pick_color)
                 return btn
 
-             # 3. NUMERIC
+             # 4. NUMERIC
             if TypeSafeParser.is_numeric_param(key) or annotation in (float, int):
                 # ... (Keep existing numeric logic) ...
                 if annotation == float or isinstance(value, float):
@@ -1852,14 +2058,14 @@ class PropertiesPanel(QWidget):
                     sb.valueChanged.connect(on_change)
                     return sb
 
-            # 4. BOOLEAN
+            # 5. BOOLEAN
             if annotation == bool or isinstance(value, bool):
                 chk = QCheckBox()
                 chk.setChecked(bool(value))
                 chk.stateChanged.connect(lambda s: on_change(s == 2))
                 return chk
 
-            # 5. STRING / FALLBACK
+            # 6. STRING / FALLBACK
             str_val = str(value) if value is not None else ""
             le = QLineEdit(str_val)
             le.textChanged.connect(on_change)
@@ -2994,15 +3200,6 @@ class VoiceoverPanel(QWidget):
         # Settings Grid
         form = QFormLayout()
         
-        # Model Selector
-        self.model_combo = QComboBox()
-        self.model_combo.addItems(["gemini-2.5-pro-preview-tts", "gemini-2.5-flash-preview-tts"])
-        # Load from settings
-        saved_model = SETTINGS.get("TTS_MODEL", "gemini-2.5-flash-preview-tts")
-        self.model_combo.setCurrentText(saved_model)
-        self.model_combo.currentTextChanged.connect(lambda t: SETTINGS.set("TTS_MODEL", t))
-        form.addRow("Model:", self.model_combo)
-        
         # Voice Selector
         self.voice_combo = QComboBox()
         # Gemini Voices (Standard set)
@@ -3053,25 +3250,30 @@ class VoiceoverPanel(QWidget):
         QTimer.singleShot(1000, self.refresh_nodes)
 
     def refresh_nodes(self):
-        """Populate combo box with Animation nodes only."""
-        current_id = self.node_combo.currentData()
+        """Populate combo with nodes that look like they accept text."""
+        current = self.node_combo.currentData()
         self.node_combo.clear()
-        
-        self.node_combo.addItem("-- Select Animation --", None)
         
         count = 0
         for nid, node in self.main_window.nodes.items():
-            if node.data.type == NodeType.ANIMATION:
-                # Show Name and Class
-                name = f"{node.data.name} ({node.data.cls_name})"
-                self.node_combo.addItem(name, nid)
+            # Filter for Text/Tex/MathTex nodes
+            cname = node.data.cls_name.lower()
+            if "tex" in cname or "text" in cname or "label" in cname:
+                
+                # --- FIX: Format as "Name (First 6 chars of ID)" ---
+                # This ensures it looks like: "MathTex (f3d875)"
+                short_id = nid[:6]
+                display_text = f"{node.data.name} ({short_id})"
+                # ---------------------------------------------------
+                
+                self.node_combo.addItem(display_text, nid)
                 count += 1
                 
-        if current_id:
-            idx = self.node_combo.findData(current_id)
+        if current:
+            idx = self.node_combo.findData(current)
             if idx >= 0: self.node_combo.setCurrentIndex(idx)
             
-        self.status_lbl.setText(f"Found {count} animation nodes.")
+        self.status_lbl.setText(f"Found {count} text-compatible nodes.")
 
     def generate_audio(self):
         text = self.text_input.toPlainText().strip()
@@ -3083,7 +3285,9 @@ class VoiceoverPanel(QWidget):
         self.status_lbl.setText("Generating audio via Gemini...")
         
         voice = self.voice_combo.currentText()
-        model = self.model_combo.currentText()
+        
+        # FIX: Read model from Global Settings
+        model = SETTINGS.get("TTS_MODEL", "gemini-2.5-flash-preview-tts")
         
         self.tts_worker = TTSWorker(text, voice, model)
         self.tts_worker.finished_signal.connect(self.on_tts_success)
@@ -3144,43 +3348,73 @@ class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.resize(400, 400)
+        self.resize(500, 450)
         layout = QVBoxLayout(self)
-        form = QFormLayout()
         
-        self.api_key = QLineEdit(SETTINGS.get("GEMINI_API_KEY", ""))
-        self.api_key.setEchoMode(QLineEdit.Password)
-        form.addRow("Gemini API Key:", self.api_key)
+        # --- Group 1: General & Performance ---
+        grp_gen = QGroupBox("General & Performance")
+        form_gen = QFormLayout(grp_gen)
         
-        self.fps = QSpinBox()
-        self.fps.setRange(15, 60)
-        self.fps.setValue(int(SETTINGS.get("FPS", 15)))
-        form.addRow("Preview FPS:", self.fps)
-        
-        self.quality = QComboBox()
-        self.quality.addItems(["Low (ql)", "Medium (qm)", "High (qh)"])
-        self.quality.setCurrentText(SETTINGS.get("QUALITY", "Low (ql)"))
-        form.addRow("Quality:", self.quality)
-        
-        # Theme selector
+        # Theme
         self.theme = QComboBox()
         self.theme.addItems([ThemeManager.LIGHT_THEME.capitalize(), ThemeManager.DARK_THEME.capitalize()])
         self.theme.setCurrentText(THEME_MANAGER.current_theme.capitalize())
-        form.addRow("Theme:", self.theme)
+        form_gen.addRow("Theme:", self.theme)
         
-        # Gemini Model selector
+        # Live Preview Toggle
+        self.chk_preview = QCheckBox("Enable Live Mobject Preview")
+        self.chk_preview.setToolTip("Renders a small PNG preview when properties change.\n Experimental feature — may be unstable.\nUnsaved work could be lost due to unexpected crashes.")
+        # Default to False (Safe Mode)
+        self.chk_preview.setChecked(SETTINGS.get("ENABLE_PREVIEW", False, type=bool))
+        form_gen.addRow("Live Preview:", self.chk_preview)
+        
+        # FPS
+        self.fps = QSpinBox()
+        self.fps.setRange(15, 60)
+        self.fps.setValue(int(SETTINGS.get("FPS", 15)))
+        form_gen.addRow("Preview FPS:", self.fps)
+        
+        # Quality
+        self.quality = QComboBox()
+        self.quality.addItems(["Low (ql)", "Medium (qm)", "High (qh)"])
+        self.quality.setCurrentText(SETTINGS.get("QUALITY", "Low (ql)"))
+        form_gen.addRow("Quality:", self.quality)
+        
+        layout.addWidget(grp_gen)
+        
+        # --- Group 2: AI Configuration ---
+        grp_ai = QGroupBox("Google Gemini AI")
+        form_ai = QFormLayout(grp_ai)
+        
+        self.api_key = QLineEdit(SETTINGS.get("GEMINI_API_KEY", ""))
+        self.api_key.setEchoMode(QLineEdit.Password)
+        self.api_key.setPlaceholderText("Paste API Key Here")
+        form_ai.addRow("API Key:", self.api_key)
+        
+        # Code Gen Model
         self.gemini_model = QComboBox()
         self.gemini_model.addItems(["gemini-3-flash-preview", "gemini-3-pro-preview"])
-        current_model = SETTINGS.get("GEMINI_MODEL", "gemini-3-flash-preview")
-        self.gemini_model.setCurrentText(current_model)
-        form.addRow("Gemini Model:", self.gemini_model)
+        self.gemini_model.setCurrentText(SETTINGS.get("GEMINI_MODEL", "gemini-3-flash-preview"))
+        form_ai.addRow("Code Model:", self.gemini_model)
+
+        # TTS Model
+        self.tts_model = QComboBox()
+        self.tts_model.addItems(["gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts"])
+        self.tts_model.setCurrentText(SETTINGS.get("GEMINI_MODEL", "gemini-2.5-flash-preview-tts"))
+        form_ai.addRow("TTS Model:", self.tts_model)
         
-        layout.addLayout(form)
+        layout.addWidget(grp_ai)
+        
+        # --- Buttons ---
         btns = QHBoxLayout()
-        b_save = QPushButton("Save")
+        b_save = QPushButton("Save and Close")
+        b_save.setStyleSheet("background-color: #2ecc71; color: white; font-weight: bold;")
         b_save.clicked.connect(self.save)
+        
         b_cancel = QPushButton("Cancel")
         b_cancel.clicked.connect(self.reject)
+        
+        btns.addStretch()
         btns.addWidget(b_save)
         btns.addWidget(b_cancel)
         layout.addLayout(btns)
@@ -3190,10 +3424,13 @@ class SettingsDialog(QDialog):
         SETTINGS.set("FPS", self.fps.value())
         SETTINGS.set("QUALITY", self.quality.currentText())
         SETTINGS.set("GEMINI_MODEL", self.gemini_model.currentText())
+        SETTINGS.set("TTS_MODEL", self.tts_model.currentText())
+        SETTINGS.set("ENABLE_PREVIEW", self.chk_preview.isChecked())
         
         selected_theme = self.theme.currentText().lower()
-        THEME_MANAGER.set_theme(selected_theme)
-        self.theme_changed.emit(selected_theme)
+        if selected_theme != THEME_MANAGER.current_theme:
+            THEME_MANAGER.set_theme(selected_theme)
+            self.theme_changed.emit(selected_theme)
         
         self.accept()
 
@@ -3270,6 +3507,8 @@ class EfficientManimWindow(QMainWindow):
         self.panel_props = PropertiesPanel()
         self.panel_props.node_updated.connect(self.mark_modified)
         self.panel_props.node_updated.connect(self.on_node_changed)
+
+        self.panel_outliner = SceneOutlinerPanel(self)
         
         self.panel_elems = ElementsPanel()
         self.panel_elems.add_requested.connect(self.add_node_center)
@@ -3289,13 +3528,14 @@ class EfficientManimWindow(QMainWindow):
         
         # Add Tabs
         self.tabs_top.addTab(self.panel_elems, "📦 Elements")
+        self.tabs_top.addTab(self.panel_outliner, "📑 Outliner") # <--- NEW TAB
         self.tabs_top.addTab(self.panel_props, "🧩 Properties")
         self.tabs_top.addTab(self.panel_assets, "🗂 Assets")
         
         self.tabs_top.addTab(self.panel_latex, "✒️ LaTeX")  # <--- NEW TAB
         
-        self.tabs_top.addTab(self.panel_voice, "🎙️ Voiceover")
         self.tabs_top.addTab(self.panel_ai, "🤖 AI")
+        self.tabs_top.addTab(self.panel_voice, "🎙️ Voiceover")
 
         self.tabs_top.addTab(self.panel_video, "🎬 Video")
         right.addWidget(self.tabs_top)
@@ -3624,14 +3864,17 @@ class EfficientManimWindow(QMainWindow):
             self.panel_props.set_node(None)
 
     def on_node_changed(self):
-        # Only regenerate code if it's NOT AI-generated
-        if not self.is_ai_generated_code:
-            self.compile_graph() # Auto-Refresh on param change
+        # 1. Update Project Modified State
+        self.mark_modified()
         
-        # We still want to see the visual preview update in the bottom left
-        # even if we don't update the Python code text.
+        # 2. Re-compile the full code (for the code view tab)
+        if not self.is_ai_generated_code:
+            self.compile_graph() 
+        
+        # 3. Trigger Preview Render (Only for Mobjects)
         node = self.panel_props.current_node
         if node and node.data.type == NodeType.MOBJECT:
+            self.preview_lbl.setText("Queueing...") # visual feedback
             self.queue_render(node)
 
     # --- COMPILER & RENDERER ---
@@ -3763,10 +4006,12 @@ class EfficientManimWindow(QMainWindow):
     def _format_param_value(self, param_name, value, node_data):
         """Safely format parameter value with type enforcement and string escaping."""
         try:
-            # 0. MOBJECT REFERENCE
-            if isinstance(value, str) and len(value) == 36:
-                if value in self.nodes:
-                    return f"m_{value[:6]}"
+            # 0. MOBJECT REFERENCE (UUID Detection)
+            # If value is a string looking like a UUID (36 chars) and exists in our node list
+            if isinstance(value, str) and len(value) == 36 and value in self.nodes:
+                # It is a reference to another node!
+                # Return the variable name: m_123456
+                return f"m_{value[:6]}"
 
             # 1. ASSET HANDLING
             if isinstance(value, str) and value in ASSETS.assets:
@@ -3809,80 +4054,166 @@ class EfficientManimWindow(QMainWindow):
             return repr(value)
 
     def queue_render(self, node):
-        if node.data.id not in self.render_queue:
-            self.render_queue.append(node.data.id)
-        # Periodically cleanup old temp files to prevent handle leaks
+        # FIX: Check Setting first. If disabled, do nothing.
+        if not SETTINGS.get("ENABLE_PREVIEW", False, type=bool):
+            self.preview_lbl.setText("Preview Disabled\n(Enable in Settings)")
+            return
+
+        # Allow re-adding the same node ID to queue if parameters changed
+        if node.data.id in self.render_queue:
+            return
+            
+        self.render_queue.append(node.data.id)
+        
+        # Cleanup old files
         AppPaths.force_cleanup_old_files(age_seconds=300)
 
     def process_render_queue(self):
-        """Render preview with safe type checking to prevent ufunc errors."""
-        if not self.render_queue: return
-        
-        nid = self.render_queue.pop(0)
-        if nid not in self.nodes: return
-        node = self.nodes[nid]
-        
-        # Build Snippet with type-safe parameter formatting
-        args = []
-        for k, v in node.data.params.items():
-            if k.startswith("_"): continue
-            if not node.data.is_param_enabled(k): continue
-            
-            v_clean = self._format_param_value(k, v, node.data)
-            args.append(f'{k}={v_clean}')
-
-        script = "from manim import *\nimport numpy as np\n\nclass PreviewScene(Scene):\n    def construct(self):\n"
-        script += f"        obj = {node.data.cls_name}({', '.join(args)})\n"
-        script += "        self.add(obj)\n"
-        
-        s_path = AppPaths.TEMP_DIR / f"preview_{nid}.py"
+        """Generates a dedicated, isolated script for Mobject previewing."""
         try:
-            with open(s_path, "w") as f: f.write(script)
+            if not self.render_queue: return
+            
+            nid = self.render_queue.pop(0)
+            if nid not in self.nodes: return
+            node = self.nodes[nid]
+            
+            # 1. SKIP ANIMATIONS
+            if node.data.type != NodeType.MOBJECT:
+                return
+
+            print(f"[Queue] Rendering preview for {node.data.name}")
+
+            # 2. Build Independent Script
+            script = "from manim import *\nimport numpy as np\n"
+            script += "config.background_color = ManimColor((0, 0, 0, 0))\n\n"
+            script += "class PreviewScene(Scene):\n    def construct(self):\n"
+            
+            # 3. SPLIT POSITIONAL AND NAMED ARGS
+            pos_args = {}   # {0: "val", 1: "val"}
+            named_args = {} # {"color": "RED"}
+            
+            for k, v in node.data.params.items():
+                if k.startswith("_"): continue
+                
+                # Check Enabled Status
+                if not node.data.is_param_enabled(k): continue
+                
+                # Format the value safely
+                v_clean = self._format_param_value(k, v, node.data)
+                
+                # Check for arg0, arg1, arg2...
+                if k.startswith("arg") and k[3:].isdigit():
+                    try:
+                        idx = int(k[3:])
+                        pos_args[idx] = v_clean
+                    except ValueError:
+                        named_args[k] = v_clean
+                else:
+                    named_args[k] = v_clean
+
+            # 4. Reconstruct Argument List
+            final_args = []
+            
+            # Add Positional Args first (sorted by index)
+            if pos_args:
+                for i in sorted(pos_args.keys()):
+                    final_args.append(str(pos_args[i]))
+            
+            # Add Named Args
+            for k, v in named_args.items():
+                final_args.append(f'{k}={v}')
+
+            # 5. Instantiate with Exception Block for Safety
+            script += f"        # Target Mobject\n"
+            script += f"        obj = {node.data.cls_name}({', '.join(final_args)})\n"
+            script += "        obj.move_to(ORIGIN)\n"
+            script += "        if obj.width > config.frame_width: obj.scale_to_fit_width(config.frame_width * 0.9)\n"
+            script += "        self.add(obj)\n"
+            
+            # 6. Write File
+            s_path = AppPaths.TEMP_DIR / f"preview_{nid}.py"
+            with open(s_path, "w", encoding="utf-8") as f: f.write(script)
+            
+            # 7. Start Worker
+            worker = RenderWorker(s_path, nid, AppPaths.TEMP_DIR, 15, "l")
+            worker.success.connect(self.on_render_ok)
+            
+            # Show error in UI instead of crashing/quitting
+            def handle_error(err):
+                LOGGER.warn(f"Preview Render Error for {node.data.name}: {err}")
+                if self.panel_props.current_node == node:
+                    self.preview_lbl.setText("Render Failed\n(Check Logs)")
+                    self.preview_lbl.setStyleSheet("color: red;")
+
+            worker.error.connect(handle_error)
+            worker.start()
+            
+            setattr(self, f"rw_{nid}", worker)
+
         except Exception as e:
-            LOGGER.error(f"Failed to write preview script: {e}")
-            return
-        
-        fps = int(SETTINGS.get("FPS", 15))
-        qual_map = {"Low (ql)": "l", "Medium (qm)": "m", "High (qh)": "h"}
-        q = qual_map.get(SETTINGS.get("QUALITY", "Low (ql)"), "l")
-        
-        worker = RenderWorker(s_path, nid, AppPaths.TEMP_DIR, fps, q)
-        worker.success.connect(self.on_render_ok)
-        worker.error.connect(lambda e: LOGGER.manim(e))
-        worker.start()
-        setattr(self, f"rw_{nid}", worker)
+            LOGGER.error(f"Queue Processing Error: {e}")
+            traceback.print_exc()
 
     def on_render_ok(self, nid, path):
+        """Called when RenderWorker successfully creates a PNG."""
         if nid in self.nodes:
             node = self.nodes[nid]
             node.data.preview_path = path
+            
+            # Force update of visual item (the green dot)
             node.update()
+            
+            # If this node is currently selected, show the image immediately
             sel = self.scene.selectedItems()
             if sel and sel[0] == node:
                 self.show_preview(node)
+                
+        # Clean up worker reference
+        if hasattr(self, f"rw_{nid}"):
+            delattr(self, f"rw_{nid}")
 
     def show_preview(self, node):
-        """Display preview for selected node only."""
-        # Clear previous preview to release file handles
+        """Display preview for selected node."""
         self.preview_lbl.clear()
         
-        # If node has a preview, show it
-        if node and hasattr(node, 'data') and node.data.preview_path:
-            if os.path.exists(node.data.preview_path):
-                try:
-                    pix = QPixmap(node.data.preview_path)
-                    if not pix.isNull():
-                        # Create a copy to avoid holding file handle
-                        scaled_pix = pix.scaledToWidth(300, Qt.SmoothTransformation)
-                        self.preview_lbl.setPixmap(scaled_pix)
-                        return
-                except Exception as e:
-                    LOGGER.warn(f"Failed to load preview: {e}")
+        # 1. Check data
+        if not node:
+            self.preview_lbl.setText("No Selection")
+            return
+
+        if not node.data.preview_path:
+            # FIX: Check toggle state
+            if not SETTINGS.get("ENABLE_PREVIEW", False, type=bool):
+                self.preview_lbl.setText("Preview Disabled")
+            else:
+                self.preview_lbl.setText("Waiting for Render...")
+                # Force a render if enabled but missing
+                self.queue_render(node)
+            return
+            
+        path = node.data.preview_path
         
-        # If no preview or not found, show status
-        self.preview_lbl.setText("No preview")
-        self.preview_lbl.setAlignment(Qt.AlignCenter)
-        self.preview_lbl.setStyleSheet("color: gray; font-size: 10pt;")
+        # 2. Check file
+        if not os.path.exists(path):
+            self.preview_lbl.setText("File Missing\nRe-queueing...")
+            self.queue_render(node)
+            return
+
+        # 3. Load Image (Directly for debugging)
+        try:
+            pix = QPixmap(path)
+            if not pix.isNull():
+                # Scale nicely
+                scaled = pix.scaled(
+                    self.preview_lbl.size(), 
+                    Qt.KeepAspectRatio, 
+                    Qt.SmoothTransformation
+                )
+                self.preview_lbl.setPixmap(scaled)
+            else:
+                self.preview_lbl.setText("Invalid Image")
+        except Exception as e:
+            self.preview_lbl.setText(f"Load Error: {e}")
 
     # --- VIDEO RENDERING ---
 
